@@ -13,13 +13,7 @@ import { bashExecutor } from "../runtime/tools/bash.js";
 import { readFileExecutor } from "../runtime/tools/read-file.js";
 import { editFileExecutor } from "../runtime/tools/edit-file.js";
 
-const SYSTEM_PROMPT = `你是一个 CLI 编程助手。你可以使用工具来运行命令、读取文件和编辑代码。
-- 当用户要求修复测试时，先用 bash 工具运行测试命令查看失败信息
-- 用 read_file 工具读取相关源文件
-- 用 edit_file 工具修改代码
-- 修改后用 bash 工具重新运行测试验证修复
-- 测试通过后给出最终总结
-不要只是描述你打算做什么——实际调用工具去做。`;
+const SYSTEM_PROMPT = "你是一个谨慎的 CLI 编程助手。先分析，不要假装已经执行命令。";
 const LOOP_SYSTEM_PROMPT =
   "你是一个最小 Agent Loop demo。只使用提供的 fake tools，根据 Observation 决定下一步，直到测试通过后 final。";
 
