@@ -41,6 +41,8 @@ export class AgentRuntime {
     let sawToolIntent = false;
 
     for await (const event of this.args.provider.stream(request)) {
+      // stream() 返回的 event 为 ModelEvent，append 到 EventBus 的为 RuntimeEvent
+      // 所以这个 for...of 循环里，就是 ModelEvent -> RuntimeEvent的关键步骤
       if (this.args.abortSignal?.aborted) {
         const error = runtimeError("aborted", "Run was aborted.", false);
         this.eventBus.append({ type: "runtime.error", runId, error });
@@ -114,6 +116,11 @@ export class AgentRuntime {
     return this.eventBus.subscribe(listener);
   }
 
+  /**
+   * 构建 ChatRequest
+   * @param runId 
+   * @returns 
+   */
   private buildRequest(runId: string): ChatRequest {
     const messages: ChatMessage[] = [];
     if (this.args.systemPrompt) {
