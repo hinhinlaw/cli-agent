@@ -13,7 +13,13 @@ import { bashExecutor } from "../runtime/tools/bash.js";
 import { readFileExecutor } from "../runtime/tools/read-file.js";
 import { editFileExecutor } from "../runtime/tools/edit-file.js";
 
-const SYSTEM_PROMPT = "你是一个谨慎的 CLI 编程助手。先分析，不要假装已经执行命令。";
+const SYSTEM_PROMPT = `你是一个 CLI 编程助手。你可以使用工具来运行命令、读取文件和编辑代码。
+- 当用户要求修复测试时，先用 bash 工具运行测试命令查看失败信息
+- 用 read_file 工具读取相关源文件
+- 用 edit_file 工具修改代码
+- 修改后用 bash 工具重新运行测试验证修复
+- 测试通过后给出最终总结
+不要只是描述你打算做什么——实际调用工具去做。`;
 const LOOP_SYSTEM_PROMPT =
   "你是一个最小 Agent Loop demo。只使用提供的 fake tools，根据 Observation 决定下一步，直到测试通过后 final。";
 
@@ -156,24 +162,48 @@ const fakeAgentLoopTools: ToolDefinition[] = [
 const realM0Tools: ToolDefinition[] = [
   {
     name: "bash",
-    description: "Execute a shell command in the project directory. Use this to run tests, build, lint, or any CLI operation.",
+    description: "Execute a shell command in the project directory. Use this to run tests (e.g. npm run test:sum), build, lint, or any CLI operation.",
     risk: "execute",
     isReadOnly: false,
-    isConcurrencySafe: false
+    isConcurrencySafe: false,
+    inputSchema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "The shell command to execute." },
+        description: { type: "string", description: "Short description of what this command does." }
+      },
+      required: ["command"]
+    }
   },
   {
     name: "read_file",
     description: "Read a file from the project and return its contents.",
     risk: "read",
     isReadOnly: true,
-    isConcurrencySafe: true
+    isConcurrencySafe: true,
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Path to the file to read, relative to project root." }
+      },
+      required: ["path"]
+    }
   },
   {
     name: "edit_file",
-    description: "Apply an edit (replace, insert, or delete) to a file in the project.",
+    description: "Apply an edit to a file by replacing oldText with newText. oldText must be unique in the file.",
     risk: "write",
     isReadOnly: false,
-    isConcurrencySafe: false
+    isConcurrencySafe: false,
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Path to the file to edit." },
+        oldText: { type: "string", description: "The exact text to replace (must be unique in the file)." },
+        newText: { type: "string", description: "The new text to replace oldText with." }
+      },
+      required: ["path", "oldText", "newText"]
+    }
   }
 ];
 
