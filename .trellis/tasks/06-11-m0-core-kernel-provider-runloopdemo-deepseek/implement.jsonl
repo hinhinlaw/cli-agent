@@ -1,0 +1,1 @@
+{"file": "research/provider-translation-pipeline.md", "reason": "博客「M0 Core Kernel」知识点到代码实现的映射文档：两层内部语言（ModelEvent/RuntimeEvent）、Provider翻译链路、EventBus、State折叠、Runtime Facade"}

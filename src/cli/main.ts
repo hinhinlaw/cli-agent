@@ -46,6 +46,35 @@ async function main(): Promise<void> {
 }
 
 async function runLoopDemo(userInput: string): Promise<void> {
+  const providerName = (process.env.LLM_PROVIDER || "").trim();
+
+  if (!providerName || providerName === "fake") {
+    await runFakeAgentLoop(userInput);
+    return;
+  }
+
+  // 真实 provider：通过环境变量配置（LLM_PROVIDER, LLM_MODEL, LLM_BASE_URL, OPENAI_API_KEY）
+  const config = loadProviderConfig(process.env);
+  const runtime = new AgentRuntime({
+    provider: config.provider,
+    model: config.model,
+    systemPrompt: SYSTEM_PROMPT,
+    tools: realM0Tools,
+  });
+
+  for await (const event of runtime.send({ text: userInput })) {
+    printRuntimeOutput(event);
+  }
+
+  output.write("\n--------------- [event log] ---------------\n");
+  for (const event of runtime.getEvents()) {
+    printLoopEvent(event);
+  }
+
+  output.write(`\n[status] ${runtime.getState().status}\n`);
+}
+
+async function runFakeAgentLoop(userInput: string): Promise<void> {
   const runtime = new AgentRuntime({
     provider: new FakeAgentLoopProvider(),
     model: "fake-agent-loop-model",
@@ -89,6 +118,35 @@ const fakeAgentLoopTools: ToolDefinition[] = [
   }
 ];
 
+const realM0Tools: ToolDefinition[] = [
+  {
+    name: "run_tests",
+    description: "Run the project test suite and report results. Use this to check if tests pass or fail.",
+    risk: "execute",
+    isReadOnly: true,
+    isConcurrencySafe: false
+  },
+  {
+    name: "read_file",
+    description: "Read a file from the project and return its contents.",
+    risk: "read",
+    isReadOnly: true,
+    isConcurrencySafe: true
+  },
+  {
+    name: "edit_file",
+    description: "Apply an edit (replace, insert, or delete) to a file in the project.",
+    risk: "write",
+    isReadOnly: false,
+    isConcurrencySafe: false
+  }
+];
+
+/**
+ * 解析命令行参数
+ * @param args 
+ * @returns 
+ */
 function parseArgs(args: string[]): { loop: boolean; promptArgs: string[] } {
   const promptArgs: string[] = [];
   let loop = false;
@@ -104,10 +162,14 @@ function parseArgs(args: string[]): { loop: boolean; promptArgs: string[] } {
   return { loop, promptArgs };
 }
 
+/**
+ * 打印实时output
+ * @param event 
+ */
 function printRuntimeOutput(event: RuntimeOutput): void {
   switch (event.type) {
     case "text.delta":
-      output.write(event.text);
+      output.write(`\ntext: ${event.text}`);
       break;
 
     case "tool.intent":
@@ -124,38 +186,42 @@ function printRuntimeOutput(event: RuntimeOutput): void {
   }
 }
 
+/**
+ * 打印 event log
+ * @param event 
+ */
 function printLoopEvent(event: RuntimeEvent): void {
   switch (event.type) {
     case "user.message":
-      output.write(`user: ${event.text}\n`);
+      output.write(`[user] ${event.text}\n`);
       break;
 
     case "run.started":
-      output.write(`run_started: ${event.runId}\n`);
+      output.write(`[run_started] run id: ${event.runId}\n`);
       break;
 
     case "model.text.delta":
-      output.write(`model_text_delta: ${event.text}\n`);
+      output.write(`[model_text_delta] ${event.text}\n`);
       break;
 
     case "model.tool.intent":
-      output.write(`model_tool_intent: ${event.intent.toolName} ${JSON.stringify(event.intent.input)}\n`);
+      output.write(`[model_tool_intent] ${event.intent.toolName} ${JSON.stringify(event.intent.input)}\n`);
       break;
 
     case "model.usage":
-      output.write(`usage: ${JSON.stringify(event.usage)}\n`);
+      output.write(`[usage] ${JSON.stringify(event.usage)}\n`);
       break;
 
     case "model.final":
-      output.write(`final: ${event.text}\n`);
+      output.write(`[final] ${event.text}\n`);
       break;
 
     case "run.finished":
-      output.write(`run_finished: ${event.status}\n`);
+      output.write(`[run_finished] ${event.status}\n`);
       break;
 
     case "runtime.error":
-      output.write(`runtime_error: ${event.error.message}\n`);
+      output.write(`[runtime_error] ${event.error.message}\n`);
       break;
   }
 }

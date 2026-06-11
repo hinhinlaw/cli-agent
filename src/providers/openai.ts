@@ -125,7 +125,6 @@ export class OpenAIProvider implements LlmProvider {
       const toolCallIndexKeys = new Map<number, string>();
 
       for await (const chunk of readServerSentEvents(response.body)) {
-        console.log('>>> chunk',chunk)
         if (chunk === "[DONE]") {
           break;
         }
@@ -151,6 +150,7 @@ export class OpenAIProvider implements LlmProvider {
             yield { type: "text_delta", text: choice.delta.content };
           }
 
+          // 模型提出tool_calls，表示模型向系统建议执行工具
           for (const toolCall of choice.delta?.tool_calls ?? []) {
             const key = toolCall.id ?? (toolCall.index === undefined ? String(toolCallFragments.size) : toolCallIndexKeys.get(toolCall.index) ?? String(toolCall.index));
             if (toolCall.index !== undefined) {
