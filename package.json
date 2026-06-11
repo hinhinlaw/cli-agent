@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test dist/**/*.test.js",
+    "test:sum": "node --test dist/tests/sum.test.js",
     "dev": "tsx src/cli/main.ts"
   },
   "devDependencies": {
