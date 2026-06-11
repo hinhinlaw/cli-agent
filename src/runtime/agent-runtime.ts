@@ -3,7 +3,19 @@ import type { ChatMessage, ChatRequest, LlmProvider, ModelEvent, ProviderError }
 import { EventBus } from "./event-bus.js";
 import { reduceConversationState } from "./conversation-state.js";
 import { ToolRegistry } from "./tool-registry.js";
-import type { ConversationState, RuntimeErrorEvent, RuntimeEvent, RuntimeOutput, ToolDefinition, ToolIntent } from "./contracts.js";
+import { handleToolIntent } from "./tool-runtime.js";
+import type {
+  ApproverFn,
+} from "./tool-runtime.js";
+import type {
+  ConversationState,
+  RuntimeErrorEvent,
+  RuntimeEvent,
+  RuntimeOutput,
+  ToolDefinition,
+  ToolExecutor,
+  ToolIntent
+} from "./contracts.js";
 
 export interface AgentRuntimeArgs {
   provider: LlmProvider;
@@ -15,6 +27,8 @@ export interface AgentRuntimeArgs {
   maxOutputTokens?: number;
   abortSignal?: AbortSignal;
   eventBus?: EventBus;
+  toolExecutors?: ToolExecutor[];
+  approver?: ApproverFn;
 }
 
 export interface UserInput {
@@ -24,10 +38,20 @@ export interface UserInput {
 export class AgentRuntime {
   private readonly eventBus: EventBus;
   private readonly toolRegistry: ToolRegistry;
+  private readonly executorMap: Map<string, ToolExecutor>;
+  private readonly approver: ApproverFn | undefined;
 
   constructor(private readonly args: AgentRuntimeArgs) {
     this.eventBus = args.eventBus ?? new EventBus();
     this.toolRegistry = new ToolRegistry(args.tools ?? []);
+
+    this.executorMap = new Map();
+    if (args.toolExecutors) {
+      for (const executor of args.toolExecutors) {
+        this.executorMap.set(executor.name, executor);
+      }
+    }
+    this.approver = args.approver;
   }
 
   async *send(input: UserInput): AsyncIterable<RuntimeOutput> {
@@ -36,13 +60,170 @@ export class AgentRuntime {
     this.eventBus.append({ type: "run.started", runId });
     yield { type: "status", status: "running" };
 
-    const request = this.buildRequest(runId);
+    // Build initial message list from current state
+    const messages = this.buildInitialMessages(input.text);
+
+    // If no tool executors are configured, fall back to single-turn behavior
+    if (this.executorMap.size === 0) {
+      yield* this.singleTurnSend(runId, messages);
+      return;
+    }
+
+    // Multi-turn loop: each iteration calls the provider once
+    while (true) {
+      const request: ChatRequest = {
+        model: this.args.model,
+        messages,
+        tools: this.buildToolSpecs(),
+        temperature: this.args.temperature,
+        maxOutputTokens: this.args.maxOutputTokens,
+        abortSignal: this.args.abortSignal,
+        metadata: { sessionId: runId, turnId: runId }
+      };
+
+      let text = "";
+      let sawToolIntent = false;
+      let lastIntent: ToolIntent | undefined;
+      let toolExecuted = false;
+
+      for await (const event of this.args.provider.stream(request)) {
+        if (this.args.abortSignal?.aborted) {
+          const error = runtimeError("aborted", "Run was aborted.", false);
+          this.eventBus.append({ type: "runtime.error", runId, error });
+          this.eventBus.append({ type: "run.finished", runId, status: "aborted", reason: "aborted" });
+          yield { type: "error", error };
+          return;
+        }
+
+        switch (event.type) {
+          case "message_start":
+            break;
+
+          case "text_delta":
+            text += event.text;
+            this.eventBus.append({ type: "model.text.delta", runId, text: event.text });
+            yield { type: "text.delta", text: event.text };
+            break;
+
+          case "tool_intent": {
+            const intentOrError = toToolIntent(event, this.args.provider.name);
+            if (intentOrError.error) {
+              this.eventBus.append({ type: "runtime.error", runId, error: intentOrError.error });
+              this.eventBus.append({ type: "run.finished", runId, status: "failed", reason: "invalid_tool_intent" });
+              yield { type: "error", error: intentOrError.error };
+              return;
+            }
+            sawToolIntent = true;
+            lastIntent = intentOrError.intent;
+            this.eventBus.append({ type: "model.tool.intent", runId, intent: intentOrError.intent });
+            yield { type: "tool.intent", intent: intentOrError.intent };
+            break;
+          }
+
+          case "message_stop":
+            if (event.usage) {
+              this.eventBus.append({ type: "model.usage", runId, usage: event.usage });
+            }
+
+            if (sawToolIntent && lastIntent) {
+              // === Execute the 5-stage tool pipeline ===
+              const result = await handleToolIntent({
+                intent: lastIntent,
+                executorMap: this.executorMap,
+                approver: this.approver,
+                abortSignal: this.args.abortSignal
+              });
+
+              // Append all pipeline events to the event bus
+              const pipelineEvents = result.events;
+              if (pipelineEvents.validation) {
+                this.eventBus.append(pipelineEvents.validation);
+              }
+              if (pipelineEvents.approval) {
+                this.eventBus.append(pipelineEvents.approval);
+              }
+              if (pipelineEvents.executionStarted) {
+                this.eventBus.append(pipelineEvents.executionStarted);
+              }
+              if (pipelineEvents.executionCompleted) {
+                this.eventBus.append(pipelineEvents.executionCompleted);
+              }
+              this.eventBus.append(pipelineEvents.observation);
+
+              // Rebuild messages from updated state (includes observation as user message)
+              const updatedState = reduceConversationState(this.eventBus.snapshot());
+              messages.length = 0;
+              if (this.args.systemPrompt) {
+                messages.push({ role: "system", content: this.args.systemPrompt });
+              }
+              if (this.args.baseMessages) {
+                messages.push(...this.args.baseMessages);
+              }
+              messages.push(...updatedState.messages);
+
+              toolExecuted = true;
+              break; // break switch
+            }
+
+            // No tool intent — final answer
+            if (!sawToolIntent) {
+              this.eventBus.append({ type: "model.final", runId, reason: event.stopReason, text });
+              this.eventBus.append({ type: "run.finished", runId, status: "completed", reason: event.stopReason });
+              yield { type: "status", status: "completed" };
+              return;
+            }
+
+            // Tool intent but no lastIntent (shouldn't happen) — fallback
+            this.eventBus.append({ type: "run.finished", runId, status: "waiting_for_tool", reason: event.stopReason });
+            yield { type: "status", status: "waiting_for_tool" };
+            return;
+
+          case "error": {
+            const error = providerRuntimeError(event.error);
+            this.eventBus.append({ type: "runtime.error", runId, error });
+            this.eventBus.append({ type: "run.finished", runId, status: "failed", reason: event.error.kind });
+            yield { type: "error", error };
+            return;
+          }
+        }
+
+        if (toolExecuted) break; // break for-await loop to continue outer while loop
+      }
+
+      if (toolExecuted) {
+        toolExecuted = false;
+        continue; // next iteration of while loop
+      }
+
+      // Stream ended without message_stop — treat as final
+      if (text) {
+        this.eventBus.append({ type: "model.final", runId, text });
+      }
+      this.eventBus.append({ type: "run.finished", runId, status: "completed" });
+      yield { type: "status", status: "completed" };
+      return;
+    }
+  }
+
+  /**
+   * Single-turn fallback (M0 compatibility): yield control back to the caller
+   * when a tool intent is received instead of executing it.
+   */
+  private async *singleTurnSend(runId: string, messages: ChatMessage[]): AsyncIterable<RuntimeOutput> {
+    const request: ChatRequest = {
+      model: this.args.model,
+      messages,
+      tools: this.buildToolSpecs(),
+      temperature: this.args.temperature,
+      maxOutputTokens: this.args.maxOutputTokens,
+      abortSignal: this.args.abortSignal,
+      metadata: { sessionId: runId, turnId: runId }
+    };
+
     let text = "";
     let sawToolIntent = false;
 
     for await (const event of this.args.provider.stream(request)) {
-      // stream() 返回的 event 为 ModelEvent，append 到 EventBus 的为 RuntimeEvent
-      // 所以这个 for...of 循环里，就是 ModelEvent -> RuntimeEvent的关键步骤
       if (this.args.abortSignal?.aborted) {
         const error = runtimeError("aborted", "Run was aborted.", false);
         this.eventBus.append({ type: "runtime.error", runId, error });
@@ -116,47 +297,29 @@ export class AgentRuntime {
     return this.eventBus.subscribe(listener);
   }
 
-  /**
-   * 构建 ChatRequest
-   * @param runId 
-   * @returns 
-   */
-  private buildRequest(runId: string): ChatRequest {
+  private buildInitialMessages(userText: string): ChatMessage[] {
     const messages: ChatMessage[] = [];
     if (this.args.systemPrompt) {
       messages.push({ role: "system", content: this.args.systemPrompt });
     }
-    const visibleTools = this.toolRegistry.visibleTools();
-    messages.push(...(this.args.baseMessages ?? []));
-    messages.push({ role: "user", content: latestUserMessage(this.eventBus.snapshot(), runId) });
+    if (this.args.baseMessages) {
+      messages.push(...this.args.baseMessages);
+    }
+    messages.push({ role: "user", content: userText });
+    return messages;
+  }
 
-    return {
-      model: this.args.model,
-      messages,
-      tools: visibleTools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema
-      })),
-      temperature: this.args.temperature,
-      maxOutputTokens: this.args.maxOutputTokens,
-      abortSignal: this.args.abortSignal,
-      metadata: {
-        sessionId: runId,
-        turnId: runId
-      }
-    };
+  private buildToolSpecs() {
+    return this.toolRegistry.visibleTools().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema
+    }));
   }
 }
 
-function latestUserMessage(events: readonly RuntimeEvent[], runId: string): string {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event.type === "user.message" && event.runId === runId) {
-      return event.text;
-    }
-  }
-  return "";
+function runtimeError(code: RuntimeErrorEvent["code"], message: string, retryable: boolean): RuntimeErrorEvent {
+  return { code, message, retryable };
 }
 
 function toToolIntent(
@@ -197,10 +360,6 @@ function providerRuntimeError(error: ProviderError): RuntimeErrorEvent {
     retryable: error.retryable,
     providerError: error
   };
-}
-
-function runtimeError(code: RuntimeErrorEvent["code"], message: string, retryable: boolean): RuntimeErrorEvent {
-  return { code, message, retryable };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -7,7 +7,11 @@ import type { ChatMessage } from "../providers/contract.js";
 import { RuntimeError } from "../providers/errors.js";
 import { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { RuntimeEvent, RuntimeOutput, ToolDefinition } from "../runtime/contracts.js";
+import type { ApprovalDecision, ToolExecutor, ToolIntent } from "../runtime/contracts.js";
 import { runChatTurn } from "../runtime/run-chat-turn.js";
+import { bashExecutor } from "../runtime/tools/bash.js";
+import { readFileExecutor } from "../runtime/tools/read-file.js";
+import { editFileExecutor } from "../runtime/tools/edit-file.js";
 
 const SYSTEM_PROMPT = "你是一个谨慎的 CLI 编程助手。先分析，不要假装已经执行命令。";
 const LOOP_SYSTEM_PROMPT =
@@ -53,13 +57,17 @@ async function runLoopDemo(userInput: string): Promise<void> {
     return;
   }
 
-  // 真实 provider：通过环境变量配置（LLM_PROVIDER, LLM_MODEL, LLM_BASE_URL, OPENAI_API_KEY）
+  // 注册真实工具 executor
+  const executors: ToolExecutor[] = [bashExecutor, readFileExecutor, editFileExecutor];
+
   const config = loadProviderConfig(process.env);
   const runtime = new AgentRuntime({
     provider: config.provider,
     model: config.model,
     systemPrompt: SYSTEM_PROMPT,
     tools: realM0Tools,
+    toolExecutors: executors,
+    approver: cliApprover,
   });
 
   for await (const event of runtime.send({ text: userInput })) {
@@ -72,6 +80,33 @@ async function runLoopDemo(userInput: string): Promise<void> {
   }
 
   output.write(`\n[status] ${runtime.getState().status}\n`);
+}
+
+/**
+ * CLI approval function: auto-allow read-only tools, ask user for write/execute tools.
+ */
+async function cliApprover(intent: ToolIntent, executor: ToolExecutor): Promise<ApprovalDecision> {
+  // Auto-allow read-only tools
+  if (executor.name === "read_file") {
+    return { type: "allow", reason: "Read-only tool, auto-allowed." };
+  }
+
+  // Ask user for confirmation
+  const readline = createInterface({ input, output });
+  try {
+    output.write(`\n--- [Approval Required] ---\n`);
+    output.write(`Tool: ${intent.toolName}\n`);
+    output.write(`Input: ${JSON.stringify(intent.input, null, 2)}\n`);
+
+    const answer = await readline.question(`Allow this tool? (y/N) `);
+    const trimmed = answer.trim().toLowerCase();
+    if (trimmed === "y" || trimmed === "yes") {
+      return { type: "allow", reason: "User approved." };
+    }
+    return { type: "deny", reason: "User denied." };
+  } finally {
+    readline.close();
+  }
 }
 
 async function runFakeAgentLoop(userInput: string): Promise<void> {
@@ -120,10 +155,10 @@ const fakeAgentLoopTools: ToolDefinition[] = [
 
 const realM0Tools: ToolDefinition[] = [
   {
-    name: "run_tests",
-    description: "Run the project test suite and report results. Use this to check if tests pass or fail.",
+    name: "bash",
+    description: "Execute a shell command in the project directory. Use this to run tests, build, lint, or any CLI operation.",
     risk: "execute",
-    isReadOnly: true,
+    isReadOnly: false,
     isConcurrencySafe: false
   },
   {
@@ -222,6 +257,26 @@ function printLoopEvent(event: RuntimeEvent): void {
 
     case "runtime.error":
       output.write(`[runtime_error] ${event.error.message}\n`);
+      break;
+
+    case "tool.validation":
+      output.write(`[tool_validation] ${event.toolName} ok=${event.result.ok}\n`);
+      break;
+
+    case "tool.approval":
+      output.write(`[tool_approval] ${event.toolName} decision=${event.decision.type}\n`);
+      break;
+
+    case "tool.execution.started":
+      output.write(`[tool_execution_started] ${event.toolName}\n`);
+      break;
+
+    case "tool.execution.completed":
+      output.write(`[tool_execution_completed] ${event.toolName} type=${event.result.type} duration=${event.result.durationMs}ms\n`);
+      break;
+
+    case "tool.observation":
+      output.write(`[tool_observation] ${event.observation.content.slice(0, 200)}\n`);
       break;
   }
 }

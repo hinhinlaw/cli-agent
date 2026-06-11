@@ -32,6 +32,7 @@ export function reduceConversationState(events: readonly RuntimeEvent[]): Conver
         assistantDraft = "";
         state.pendingToolIntents.push(event.intent);
         state.status = "waiting_for_tool";
+        state.turn += 1;
         break;
 
       case "model.usage":
@@ -51,6 +52,26 @@ export function reduceConversationState(events: readonly RuntimeEvent[]): Conver
       case "runtime.error":
         state.lastError = event.error;
         state.status = "failed";
+        break;
+
+      case "tool.validation":
+        break;
+
+      case "tool.approval":
+        break;
+
+      case "tool.execution.started":
+        break;
+
+      case "tool.execution.completed":
+        break;
+
+      case "tool.observation":
+        state.messages.push({ role: "user", content: event.observation.content });
+        state.pendingToolIntents = state.pendingToolIntents.filter(
+          (intent) => intent.intentId !== event.intentId
+        );
+        state.status = "running";
         break;
     }
   }
