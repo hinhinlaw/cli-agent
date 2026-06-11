@@ -14,6 +14,7 @@ export interface ChatMessage {
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
+  tools?: ChatToolSpec[];
   temperature?: number;
   maxOutputTokens?: number;
   abortSignal?: AbortSignal;
@@ -21,6 +22,12 @@ export interface ChatRequest {
     sessionId?: string;
     turnId?: string;
   };
+}
+
+export interface ChatToolSpec {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
 }
 
 /**

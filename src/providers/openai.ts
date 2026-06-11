@@ -10,12 +10,13 @@ interface OpenAIChatCompletionChunk {
   id?: string;
   model?: string;
   choices?: Array<{
-    delta?: {
-      content?: string;
-      tool_calls?: Array<{
-        id?: string;
-        function?: {
-          name?: string;
+      delta?: {
+        content?: string;
+        tool_calls?: Array<{
+          index?: number;
+          id?: string;
+          function?: {
+            name?: string;
           arguments?: string;
         };
       }>;
@@ -120,8 +121,11 @@ export class OpenAIProvider implements LlmProvider {
 
       let stopReason: string | undefined;
       let usage: TokenUsage | undefined;
+      const toolCallFragments = new Map<string, { id?: string; name?: string; argumentsText: string }>();
+      const toolCallIndexKeys = new Map<number, string>();
 
       for await (const chunk of readServerSentEvents(response.body)) {
+        console.log('>>> chunk',chunk)
         if (chunk === "[DONE]") {
           break;
         }
@@ -148,22 +152,30 @@ export class OpenAIProvider implements LlmProvider {
           }
 
           for (const toolCall of choice.delta?.tool_calls ?? []) {
-            const name = toolCall.function?.name;
-            const argumentsText = toolCall.function?.arguments;
-            if (name || argumentsText) {
-              yield {
-                type: "tool_intent",
-                id: toolCall.id,
-                name: name ?? "unknown",
-                argumentsText: argumentsText ?? ""
-              };
+            const key = toolCall.id ?? (toolCall.index === undefined ? String(toolCallFragments.size) : toolCallIndexKeys.get(toolCall.index) ?? String(toolCall.index));
+            if (toolCall.index !== undefined) {
+              toolCallIndexKeys.set(toolCall.index, key);
             }
+            const current = toolCallFragments.get(key) ?? { argumentsText: "" };
+            toolCallFragments.set(key, {
+              id: toolCall.id ?? current.id,
+              name: toolCall.function?.name ?? current.name,
+              argumentsText: current.argumentsText + (toolCall.function?.arguments ?? "")
+            });
           }
 
           stopReason = choice.finish_reason ?? stopReason;
         }
       }
 
+      for (const toolCall of toolCallFragments.values()) {
+        yield {
+          type: "tool_intent",
+          id: toolCall.id,
+          name: toolCall.name ?? "unknown",
+          argumentsText: toolCall.argumentsText
+        };
+      }
       yield { type: "message_stop", usage, stopReason };
     } catch (error) {
       yield { type: "error", error: providerErrorFromUnknown(this.name, error) };
@@ -187,6 +199,7 @@ export class OpenAIProvider implements LlmProvider {
     return {
       model: request.model,
       messages: request.messages.map(toOpenAIMessage),
+      tools: request.tools?.map(toOpenAITool),
       temperature: request.temperature,
       max_tokens: request.maxOutputTokens,
       stream
@@ -215,6 +228,17 @@ function toOpenAIMessage(message: ChatMessage): Record<string, string> {
   return {
     role: message.role,
     content: message.content
+  };
+}
+
+function toOpenAITool(tool: NonNullable<ChatRequest["tools"]>[number]): Record<string, unknown> {
+  return {
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.inputSchema ?? { type: "object", properties: {} }
+    }
   };
 }
 

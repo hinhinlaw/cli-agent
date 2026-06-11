@@ -52,86 +52,85 @@ Questions to answer:
 
 ---
 
-## Scenario: Minimal Agent Loop Runtime API
+## Scenario: M0 Core Kernel Runtime API
 
 ### 1. Scope / Trigger
 
-- Trigger: adding or changing the provider-agnostic Agent Loop runtime API.
-- Applies to: `src/runtime/run-agent-loop.ts` and tests that exercise model event -> tool intent -> observation -> next model turn.
-- Boundary: the loop is core runtime code. It must not know HTTP, React, session files, real filesystem tools, or provider-specific tool calling formats.
+- Trigger: adding or changing the provider-agnostic runtime API for Build Harness 00-09 M0 Core Kernel.
+- Applies to: `src/runtime/agent-runtime.ts`, `src/runtime/contracts.ts`, `src/runtime/event-bus.ts`, `src/runtime/conversation-state.ts`, `src/runtime/tool-registry.ts`, provider contracts, and CLI code that calls the runtime.
+- Boundary: M0 proves provider output enters core-owned contracts and event history. It does **not** execute tools. Tool execution belongs to the later Intent/Execution milestone.
 
 ### 2. Signatures
 
 ```ts
-runAgentLoop(args: {
-  model: LlmProvider
-  modelName: string
-  messages: ChatMessage[]
+new AgentRuntime({
+  provider: LlmProvider
+  model: string
   systemPrompt?: string
-  tools?: AgentToolSpec[]
-  toolRegistry: ToolRegistry
-  maxTurns?: number
+  baseMessages?: ChatMessage[]
+  tools?: ToolDefinition[]
   temperature?: number
   maxOutputTokens?: number
   abortSignal?: AbortSignal
-}): Promise<{
-  newMessages: ChatMessage[]
-  events: AgentLoopEvent[]
-  finalAnswer?: string
-  stopReason: "final" | "max_turns_exceeded" | "aborted"
-}>
+})
+
+runtime.send({ text: string }): AsyncIterable<RuntimeOutput>
+runtime.getState(): ConversationState
+runtime.getEvents(): RuntimeEvent[]
 ```
 
 ### 3. Contracts
 
-- `messages` are the base model-visible context supplied by the caller.
-- `newMessages` contain only messages created during this loop run.
-- Tool observations are projected back into `newMessages` as ordinary `user` messages beginning with `Observation:`. Do not add a new provider role unless every provider adapter supports the new role contract.
-- `events` are runtime facts for the caller to inspect; they are not a persistent session log yet.
-- `toolRegistry` owns execution. The model may emit `tool_intent`, but the loop validates and executes it.
+- Provider adapters translate external API responses into provider-level `ModelEvent`; provider private response objects must not leak into runtime state.
+- `ChatRequest.tools` is the structured provider request projection from `ToolRegistry`; do not rely only on prompt text for tool definitions.
+- Runtime facts are append-only `RuntimeEvent` entries. State is rebuilt from events via the reducer.
+- `ToolIntent` is a pending application/request, not proof of execution.
+- CLI calls the runtime facade and renders `RuntimeOutput`; it must not call provider streams directly in agent mode or mutate conversation state.
+- `runAgentLoop` is only a compatibility wrapper over the M0 runtime facade and must keep M0 no-execution semantics.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Runtime behavior |
 | --- | --- |
-| Model emits final text and `message_stop` | Append assistant message, emit `final`, return `stopReason: "final"` |
-| Model emits known `tool_intent` with JSON object arguments | Execute tool, turn result into observation, continue next turn |
-| Model emits unknown tool | Do not execute; append failed observation with `errorType: "unknown_tool"` |
-| Model emits malformed or non-object tool arguments | Do not execute; append retryable observation with `errorType: "invalid_tool_intent"` |
-| Tool throws | Catch and append failed observation with `errorType: "tool_error"` |
-| `turn >= maxTurns` | Emit `stop`, return `stopReason: "max_turns_exceeded"` |
-| `abortSignal.aborted` | Emit `stop`, return `stopReason: "aborted"` |
-| Provider emits error event | Map through provider error handling and throw `RuntimeError` |
+| Model emits text deltas and `message_stop` without tool intent | Append model text events, finalize state as `completed` |
+| Model emits `tool_intent` with JSON object arguments | Record `model.tool.intent`, add to `pendingToolIntents`, finish as `waiting_for_tool` |
+| Model emits malformed or non-object tool arguments | Emit `runtime.error` with `code: "invalid_tool_intent"` and finish as `failed` |
+| Provider emits fragmented tool call arguments | Provider adapter must aggregate fragments before yielding one `tool_intent` |
+| Provider emits error event | Convert to `runtime.error` and finish as `failed` |
+| `abortSignal.aborted` | Emit abort error and finish as `aborted` |
+| Tool implementation exists in registry | Do not execute it in M0 |
 
 ### 5. Good/Base/Bad Cases
 
-- Good: fake provider first emits `tool_intent`, fake tool returns observation, second provider call sees `Observation:` and returns final.
-- Base: model returns final on the first turn; loop returns one assistant `newMessages` entry.
-- Bad: loop executes unknown tools, or only prints tool output without adding an observation to `newMessages`.
+- Good: provider emits text plus `tool_intent`; runtime yields text and `tool.intent`, event log records the intent, state becomes `waiting_for_tool`, and no tool function runs.
+- Base: provider returns final text on the first run; runtime records events and state becomes `completed`.
+- Bad: provider adapter yields every OpenAI argument fragment as a separate tool intent.
+- Bad: CLI builds provider messages itself or inserts tool descriptions only as prompt text.
+- Bad: M0 turns tool intent into `Observation:` messages or runs shell/file/edit actions.
 
 ### 6. Tests Required
 
-- Final response exits the loop and returns `stopReason: "final"`.
-- Tool result is converted into an observation visible in the next model request.
-- Unknown tool and invalid arguments become observations instead of execution.
-- `maxTurns` stops the loop after the latest observation.
-- Tests must use fake providers/tools and must not require real network, filesystem tools, shell commands, or API keys.
+- Runtime final text path: output events, event log types, final state.
+- Tool intent path: pending intent exists, state is `waiting_for_tool`, no observation text is produced.
+- State reducer rebuilds pending tool state from event arrays.
+- Runtime rejects malformed tool intent args.
+- Provider adapter aggregates streamed tool call fragments into one tool intent.
+- Registry projection reaches `ChatRequest.tools`.
+- CLI agent mode renders pending intent/status and does not print observations/final fix text.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```ts
-// Tool output is printed but never becomes model-visible context.
-console.log(await tool.execute(args))
+// M0 crosses the Intent/Execution boundary too early.
+const result = await registry.get(intent.toolName)?.execute(intent.input)
+messages.push({ role: "user", content: `Observation: ${result.summary}` })
 ```
 
 #### Correct
 
 ```ts
-const result = await tool.execute(intent.input, intent)
-newMessages.push({
-  role: "user",
-  content: `Observation: ${intent.name} ${result.ok ? "succeeded" : "failed"}`
-})
+eventBus.append({ type: "model.tool.intent", runId, intent })
+yield { type: "tool.intent", intent }
 ```

@@ -5,7 +5,8 @@ import { loadProviderConfig } from "../config/load-provider-config.js";
 import { FakeAgentLoopProvider } from "../providers/fake.js";
 import type { ChatMessage } from "../providers/contract.js";
 import { RuntimeError } from "../providers/errors.js";
-import { runAgentLoop, type AgentLoopEvent, type AgentToolSpec, type ToolRegistry } from "../runtime/run-agent-loop.js";
+import { AgentRuntime } from "../runtime/agent-runtime.js";
+import type { RuntimeEvent, RuntimeOutput, ToolDefinition } from "../runtime/contracts.js";
 import { runChatTurn } from "../runtime/run-chat-turn.js";
 
 const SYSTEM_PROMPT = "你是一个谨慎的 CLI 编程助手。先分析，不要假装已经执行命令。";
@@ -45,122 +46,48 @@ async function main(): Promise<void> {
 }
 
 async function runLoopDemo(userInput: string): Promise<void> {
-  const state = createFakeAgentProjectState();
-  const result = await runAgentLoop({
-    model: new FakeAgentLoopProvider(),
-    modelName: "fake-agent-loop-model",
+  const runtime = new AgentRuntime({
+    provider: new FakeAgentLoopProvider(),
+    model: "fake-agent-loop-model",
     systemPrompt: LOOP_SYSTEM_PROMPT,
     tools: fakeAgentLoopTools,
-    messages: [
-      {
-        role: "user",
-        content: userInput
-      }
-    ],
-    toolRegistry: createFakeAgentToolRegistry(state),
-    maxTurns: 8
   });
 
-  for (const event of result.events) {
+  for await (const event of runtime.send({ text: userInput })) {
+    printRuntimeOutput(event);
+  }
+
+  output.write("\n[event log]\n");
+  for (const event of runtime.getEvents()) {
     printLoopEvent(event);
   }
 
-  output.write(`\nstopReason: ${result.stopReason}\n`);
+  output.write(`\nstatus: ${runtime.getState().status}\n`);
 }
 
-interface FakeAgentProjectState {
-  sumFixed: boolean;
-}
-
-const fakeAgentLoopTools: AgentToolSpec[] = [
+const fakeAgentLoopTools: ToolDefinition[] = [
   {
     name: "fake_test",
-    description: "Run the fake test suite and report whether the sum negative branch bug is still present."
+    description: "Run the fake test suite and report whether the sum negative branch bug is still present.",
+    risk: "execute",
+    isReadOnly: true,
+    isConcurrencySafe: false
   },
   {
     name: "fake_read_file",
-    description: "Read a fake project file such as src/sum.ts."
+    description: "Read a fake project file such as src/sum.ts.",
+    risk: "read",
+    isReadOnly: true,
+    isConcurrencySafe: true
   },
   {
     name: "fake_edit_file",
-    description: "Apply a fake edit to src/sum.ts."
+    description: "Apply a fake edit to src/sum.ts.",
+    risk: "write",
+    isReadOnly: false,
+    isConcurrencySafe: false
   }
 ];
-
-function createFakeAgentProjectState(): FakeAgentProjectState {
-  return { sumFixed: false };
-}
-
-function createFakeAgentToolRegistry(state: FakeAgentProjectState): ToolRegistry {
-  return {
-    fake_test: {
-      execute() {
-        if (state.sumFixed) {
-          return {
-            ok: true,
-            summary: "node --test dist/sum.test.js passed.",
-            evidence: "2 tests passed: adds positive numbers; adds negative and positive numbers"
-          };
-        }
-
-        return {
-          ok: false,
-          summary: "node --test dist/sum.test.js failed.",
-          evidence: "adds negative and positive numbers: expected 4, actual 3",
-          errorType: "test_failure",
-          retryable: true
-        };
-      }
-    },
-    fake_read_file: {
-      execute(inputValue) {
-        const path = String(inputValue.path ?? "");
-        if (path !== "src/sum.ts") {
-          return {
-            ok: false,
-            summary: `File not found in fake project: ${path}`,
-            errorType: "not_found",
-            retryable: false
-          };
-        }
-
-        return {
-          ok: true,
-          summary: "Read src/sum.ts.",
-          evidence: [
-            "export function sum(a: number, b: number): number {",
-            "  if (a < 0 || b < 0) {",
-            "    return a + b - 1;",
-            "  }",
-            "",
-            "  return a + b;",
-            "}"
-          ].join("\n")
-        };
-      }
-    },
-    fake_edit_file: {
-      execute(inputValue) {
-        const path = String(inputValue.path ?? "");
-        if (path !== "src/sum.ts") {
-          return {
-            ok: false,
-            summary: `Refused to edit unknown fake project file: ${path}`,
-            errorType: "invalid_path",
-            retryable: false
-          };
-        }
-
-        state.sumFixed = true;
-        return {
-          ok: true,
-          summary: "Replaced the broken negative branch with a single return a + b implementation.",
-          evidence: "export function sum(a: number, b: number): number { return a + b; }"
-        };
-      }
-    }
-  };
-}
 
 function parseArgs(args: string[]): { loop: boolean; promptArgs: string[] } {
   const promptArgs: string[] = [];
@@ -177,39 +104,58 @@ function parseArgs(args: string[]): { loop: boolean; promptArgs: string[] } {
   return { loop, promptArgs };
 }
 
-function printLoopEvent(event: AgentLoopEvent): void {
+function printRuntimeOutput(event: RuntimeOutput): void {
   switch (event.type) {
-    case "turn_start":
-      output.write(`\n[turn ${event.turn}]\n`);
+    case "text.delta":
+      output.write(event.text);
       break;
 
-    case "assistant_message":
-      output.write(`assistant: ${event.content}\n`);
+    case "tool.intent":
+      output.write(`\ntool_intent: ${event.intent.toolName} ${JSON.stringify(event.intent.input)}\n`);
       break;
 
-    case "tool_intent":
-      output.write(`tool_intent: ${event.intent.name} ${JSON.stringify(event.intent.input)}\n`);
+    case "status":
+      output.write(`\nstatus: ${event.status}\n`);
       break;
 
-    case "observation":
-      output.write(
-        [
-          `observation: ${event.observation.toolName} ${event.observation.ok ? "ok" : "failed"}`,
-          `summary: ${event.observation.summary}`,
-          event.observation.evidence ? `evidence: ${event.observation.evidence}` : undefined,
-          event.observation.errorType ? `errorType: ${event.observation.errorType}` : undefined
-        ]
-          .filter((line): line is string => line !== undefined)
-          .join("\n") + "\n"
-      );
+    case "error":
+      output.write(`\nerror: ${event.error.message}\n`);
+      break;
+  }
+}
+
+function printLoopEvent(event: RuntimeEvent): void {
+  switch (event.type) {
+    case "user.message":
+      output.write(`user: ${event.text}\n`);
       break;
 
-    case "final":
-      output.write(`final: ${event.answer}\n`);
+    case "run.started":
+      output.write(`run_started: ${event.runId}\n`);
       break;
 
-    case "stop":
-      output.write(`stop: ${event.reason}\n`);
+    case "model.text.delta":
+      output.write(`model_text_delta: ${event.text}\n`);
+      break;
+
+    case "model.tool.intent":
+      output.write(`model_tool_intent: ${event.intent.toolName} ${JSON.stringify(event.intent.input)}\n`);
+      break;
+
+    case "model.usage":
+      output.write(`usage: ${JSON.stringify(event.usage)}\n`);
+      break;
+
+    case "model.final":
+      output.write(`final: ${event.text}\n`);
+      break;
+
+    case "run.finished":
+      output.write(`run_finished: ${event.status}\n`);
+      break;
+
+    case "runtime.error":
+      output.write(`runtime_error: ${event.error.message}\n`);
       break;
   }
 }

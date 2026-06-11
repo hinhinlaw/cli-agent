@@ -15,10 +15,9 @@ test("CLI --loop runs the fake Agent Loop demo", async () => {
   ]);
 
   assert.match(stdout, /tool_intent: fake_test/);
-  assert.match(stdout, /observation: fake_test failed/);
-  assert.match(stdout, /tool_intent: fake_read_file/);
-  assert.match(stdout, /tool_intent: fake_edit_file/);
-  assert.match(stdout, /observation: fake_test ok/);
-  assert.match(stdout, /final: 已修复失败测试/);
-  assert.match(stdout, /stopReason: final/);
+  assert.match(stdout, /model_tool_intent: fake_test/);
+  assert.match(stdout, /run_finished: waiting_for_tool/);
+  assert.match(stdout, /status: waiting_for_tool/);
+  assert.doesNotMatch(stdout, /observation:/);
+  assert.doesNotMatch(stdout, /final: 已修复失败测试/);
 });
