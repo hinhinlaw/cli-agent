@@ -228,7 +228,7 @@ function parseArgs(args: string[]): { loop: boolean; promptArgs: string[] } {
 function printRuntimeOutput(event: RuntimeOutput): void {
   switch (event.type) {
     case "text.delta":
-      output.write(`\ntext: ${event.text}`);
+      output.write(event.text);
       break;
 
     case "tool.intent":
