@@ -1,1 +1,1 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "research/code-flow-trace-sum-fix.md", "reason": "以真实运行日志为主线，逐行追踪「请帮我运行 npm run test:sum并修复报错」从 CLI 入口到多轮循环完成的全链路代码流：三层for...of消费、5阶段工具管线（Intent→Execution分离）、Context重建、EventBus→ConversationState折叠"}
