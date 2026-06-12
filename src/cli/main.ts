@@ -13,7 +13,14 @@ import { bashExecutor } from "../runtime/tools/bash.js";
 import { readFileExecutor } from "../runtime/tools/read-file.js";
 import { editFileExecutor } from "../runtime/tools/edit-file.js";
 
-const SYSTEM_PROMPT = "你是一个谨慎的 CLI 编程助手。先分析，不要假装已经执行命令。";
+const SYSTEM_PROMPT = `你是一个 CLI 编程助手。重要规则：
+
+1. 当你需要执行操作时，必须通过系统提供的 function calling 机制来调用工具
+2. 不要在文本回复中使用 XML 标签（如 <tool_call>、<parameter> 等）来模拟工具调用
+3. 不要以文本形式描述工具调用参数——这些不会被执行，只会被当作普通文本输出
+4. 正确做法：直接调用原生 function call，系统会自动执行并在下一轮给你 observation
+5. 每次只调用当前最需要的工具，等拿到结果后再决定下一步
+6. 先分析问题，确认方案后再动手，不要假装已执行过命令`;
 const LOOP_SYSTEM_PROMPT =
   "你是一个最小 Agent Loop demo。只使用提供的 fake tools，根据 Observation 决定下一步，直到测试通过后 final。";
 
