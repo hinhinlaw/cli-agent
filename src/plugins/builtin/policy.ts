@@ -42,7 +42,7 @@ export const builtinPolicy: PluginModule = {
           id: "cli-approval",
           order: 100, // 放在最后，让其他 hook 先过
           blocking: true, // 阻断型 gate：能 deny/ask
-          timeoutMs: 30000, // 用户输入需要更长超时
+          timeoutMs: 0, // 0 = 无超时，等用户慢慢决定
           run: cliApprovalHook
         }
       ]
