@@ -1,0 +1,12 @@
+{"file": "src/core/contracts.ts", "reason": "新增：Plugin Manifest、Contribution、HookDecision 等类型定义"}
+{"file": "src/plugins/manifest.ts", "reason": "新增：Manifest 校验逻辑"}
+{"file": "src/core/registry.ts", "reason": "新增：CapabilityRegistry — 登记 provider/tool/hook，记录来源"}
+{"file": "src/plugins/hook-kernel.ts", "reason": "新增：HookKernel — preToolUse gate，结构化 HookDecision"}
+{"file": "src/plugins/host.ts", "reason": "新增：PluginHost — load() 插件，协调 Manifest/Registry/HookKernel"}
+{"file": "src/plugins/lifecycle.ts", "reason": "新增：Lifecycle 简化状态机 loaded/ready/failed"}
+{"file": "src/plugins/builtin/provider-openai.ts", "reason": "搬家：OpenAIProvider 变成 builtin provider plugin"}
+{"file": "src/plugins/builtin/local-tools.ts", "reason": "搬家：bash/read_file/edit_file 变成 builtin tools plugin"}
+{"file": "src/plugins/builtin/policy.ts", "reason": "搬家：cliApprover 变成 builtin policy plugin（preToolUse hook）"}
+{"file": "src/core/runtime.ts", "reason": "改动：AgentRuntime 接收 registry + hookKernel 而非直接传 provider/tools"}
+{"file": "src/cli/main.ts", "reason": "改动：main.ts 变成桥接层，装配 PluginHost + 加载 builtin 插件"}
+{"file": "src/core/events.ts", "reason": "移动：现有 event-bus.ts 移入 core/"}

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ChatMessage, ChatRequest, LlmProvider, ModelEvent, ProviderError } from "../providers/contract.js";
+import type { CapabilityRegistry } from "../core/registry.js";
+import type { HookKernel } from "../plugins/hook-kernel.js";
 import { EventBus } from "./event-bus.js";
 import { reduceConversationState } from "./conversation-state.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -8,6 +10,7 @@ import type {
   ApproverFn,
 } from "./tool-runtime.js";
 import type {
+  ApprovalDecision,
   ConversationState,
   RuntimeErrorEvent,
   RuntimeEvent,
@@ -18,15 +21,21 @@ import type {
 } from "./contracts.js";
 
 export interface AgentRuntimeArgs {
-  provider: LlmProvider;
   model: string;
   systemPrompt?: string;
   baseMessages?: ChatMessage[];
-  tools?: ToolDefinition[];
   temperature?: number;
   maxOutputTokens?: number;
   abortSignal?: AbortSignal;
   eventBus?: EventBus;
+
+  /** 新架构：通过 registry + hookKernel 注入能力 */
+  registry?: CapabilityRegistry;
+  hookKernel?: HookKernel;
+
+  /** 旧架构（fallback/fake）：直接注入 */
+  provider?: LlmProvider;
+  tools?: ToolDefinition[];
   toolExecutors?: ToolExecutor[];
   approver?: ApproverFn;
 }
@@ -40,18 +49,52 @@ export class AgentRuntime {
   private readonly toolRegistry: ToolRegistry;
   private readonly executorMap: Map<string, ToolExecutor>;
   private readonly approver: ApproverFn | undefined;
+  private readonly provider: LlmProvider;
+  private readonly registry?: CapabilityRegistry;
+  private readonly hookKernel?: HookKernel;
 
   constructor(private readonly args: AgentRuntimeArgs) {
     this.eventBus = args.eventBus ?? new EventBus();
-    this.toolRegistry = new ToolRegistry(args.tools ?? []);
+    this.registry = args.registry;
+    this.hookKernel = args.hookKernel;
 
-    this.executorMap = new Map();
-    if (args.toolExecutors) {
-      for (const executor of args.toolExecutors) {
-        this.executorMap.set(executor.name, executor);
+    // Resolve provider: registry → direct fallback
+    if (args.registry) {
+      const registered = args.registry.getActiveProvider();
+      if (!registered) {
+        throw new Error("No active provider available in registry.");
       }
+      this.provider = registered.provider;
+
+      // Build tool registry from registry
+      const defs = args.registry.getVisibleToolDefinitions();
+      this.toolRegistry = new ToolRegistry(defs);
+
+      // Build executor map from registry
+      this.executorMap = args.registry.getExecutorMap();
+
+      // Approver wraps HookKernel
+      if (args.hookKernel) {
+        this.approver = createApproverFromHookKernel(args.hookKernel);
+      } else {
+        this.approver = undefined;
+      }
+    } else {
+      // Fallback: use directly injected params
+      if (!args.provider) {
+        throw new Error("Either registry or provider must be provided.");
+      }
+      this.provider = args.provider;
+      this.toolRegistry = new ToolRegistry(args.tools ?? []);
+
+      this.executorMap = new Map();
+      if (args.toolExecutors) {
+        for (const executor of args.toolExecutors) {
+          this.executorMap.set(executor.name, executor);
+        }
+      }
+      this.approver = args.approver;
     }
-    this.approver = args.approver;
   }
 
   async *send(input: UserInput): AsyncIterable<RuntimeOutput> {
@@ -86,7 +129,7 @@ export class AgentRuntime {
       let lastIntent: ToolIntent | undefined;
       let toolExecuted = false;
 
-      for await (const event of this.args.provider.stream(request)) {
+      for await (const event of this.provider.stream(request)) {
         if (this.args.abortSignal?.aborted) {
           const error = runtimeError("aborted", "Run was aborted.", false);
           this.eventBus.append({ type: "runtime.error", runId, error });
@@ -106,7 +149,7 @@ export class AgentRuntime {
             break;
 
           case "tool_intent": {
-            const intentOrError = toToolIntent(event, this.args.provider.name);
+            const intentOrError = toToolIntent(event, this.provider.name);
             if (intentOrError.error) {
               this.eventBus.append({ type: "runtime.error", runId, error: intentOrError.error });
               this.eventBus.append({ type: "run.finished", runId, status: "failed", reason: "invalid_tool_intent" });
@@ -114,9 +157,12 @@ export class AgentRuntime {
               return;
             }
             sawToolIntent = true;
-            lastIntent = intentOrError.intent;
-            this.eventBus.append({ type: "model.tool.intent", runId, intent: intentOrError.intent });
-            yield { type: "tool.intent", intent: intentOrError.intent };
+            lastIntent = {
+              ...intentOrError.intent,
+              toolName: decodeApiName(intentOrError.intent.toolName)
+            };
+            this.eventBus.append({ type: "model.tool.intent", runId, intent: lastIntent });
+            yield { type: "tool.intent", intent: lastIntent };
             break;
           }
 
@@ -150,7 +196,7 @@ export class AgentRuntime {
               }
               this.eventBus.append(pipelineEvents.observation);
 
-              // Rebuild messages from updated state (includes observation as user message)
+              // Rebuild messages from updated state
               const updatedState = reduceConversationState(this.eventBus.snapshot());
               messages.length = 0;
               if (this.args.systemPrompt) {
@@ -173,7 +219,7 @@ export class AgentRuntime {
               return;
             }
 
-            // Tool intent but no lastIntent (shouldn't happen) — fallback
+            // Tool intent but no lastIntent — fallback
             this.eventBus.append({ type: "run.finished", runId, status: "waiting_for_tool", reason: event.stopReason });
             yield { type: "status", status: "waiting_for_tool" };
             return;
@@ -187,15 +233,14 @@ export class AgentRuntime {
           }
         }
 
-        if (toolExecuted) break; // break for-await loop to continue outer while loop
+        if (toolExecuted) break;
       }
 
       if (toolExecuted) {
         toolExecuted = false;
-        continue; // next iteration of while loop
+        continue;
       }
 
-      // Stream ended without message_stop — treat as final
       if (text) {
         this.eventBus.append({ type: "model.final", runId, text });
       }
@@ -205,10 +250,6 @@ export class AgentRuntime {
     }
   }
 
-  /**
-   * Single-turn fallback (M0 compatibility): yield control back to the caller
-   * when a tool intent is received instead of executing it.
-   */
   private async *singleTurnSend(runId: string, messages: ChatMessage[]): AsyncIterable<RuntimeOutput> {
     const request: ChatRequest = {
       model: this.args.model,
@@ -223,7 +264,7 @@ export class AgentRuntime {
     let text = "";
     let sawToolIntent = false;
 
-    for await (const event of this.args.provider.stream(request)) {
+    for await (const event of this.provider.stream(request)) {
       if (this.args.abortSignal?.aborted) {
         const error = runtimeError("aborted", "Run was aborted.", false);
         this.eventBus.append({ type: "runtime.error", runId, error });
@@ -243,7 +284,7 @@ export class AgentRuntime {
           break;
 
         case "tool_intent": {
-          const intentOrError = toToolIntent(event, this.args.provider.name);
+          const intentOrError = toToolIntent(event, this.provider.name);
           if (intentOrError.error) {
             this.eventBus.append({ type: "runtime.error", runId, error: intentOrError.error });
             this.eventBus.append({ type: "run.finished", runId, status: "failed", reason: "invalid_tool_intent" });
@@ -311,7 +352,8 @@ export class AgentRuntime {
 
   private buildToolSpecs() {
     return this.toolRegistry.visibleTools().map((tool) => ({
-      name: tool.name,
+      // API 要求 tool name 匹配 ^[a-zA-Z0-9_-]+$，将内部的 / 分隔符编码为 __
+      name: encodeApiName(tool.name),
       description: tool.description,
       inputSchema: tool.inputSchema
     }));
@@ -364,4 +406,41 @@ function providerRuntimeError(error: ProviderError): RuntimeErrorEvent {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 将 HookKernel 的 runPreToolUse 适配为 handleToolIntent 需要的 ApproverFn。
+ */
+function createApproverFromHookKernel(hookKernel: HookKernel): ApproverFn {
+  return async function hookApprover(intent: ToolIntent, _executor: ToolExecutor): Promise<ApprovalDecision> {
+    const decision = await hookKernel.runPreToolUse(intent);
+    switch (decision.type) {
+      case "allow":
+        return { type: "allow", reason: decision.reason };
+      case "deny":
+        return { type: "deny", reason: decision.reason };
+      case "ask":
+        return {
+          type: "deny",
+          reason: `Hook requires user confirmation: ${decision.question}. Use interactive mode to approve.`
+        };
+    }
+  };
+}
+
+/**
+ * 将内部 tool name（含 / 分隔符）编码为 API 兼容格式。
+ * API 要求 tool name 匹配 ^[a-zA-Z0-9_-]+$，我们用 __ 作为 / 的替代。
+ * 例：builtin/local-tools/bash → builtin__local-tools__bash
+ */
+function encodeApiName(internalName: string): string {
+  return internalName.replace(/\//g, "__");
+}
+
+/**
+ * 将 API 兼容的 tool name 解码回内部格式。
+ * 例：builtin__local-tools__bash → builtin/local-tools/bash
+ */
+function decodeApiName(apiName: string): string {
+  return apiName.replace(/__/g, "/");
 }

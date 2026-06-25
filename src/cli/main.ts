@@ -5,13 +5,17 @@ import { loadProviderConfig } from "../config/load-provider-config.js";
 import { FakeAgentLoopProvider } from "../providers/fake.js";
 import type { ChatMessage } from "../providers/contract.js";
 import { RuntimeError } from "../providers/errors.js";
+import { CapabilityRegistry } from "../core/registry.js";
+import { HookKernel } from "../plugins/hook-kernel.js";
+import { PluginHost } from "../plugins/host.js";
+import type { PluginEvent } from "../core/contracts.js";
+import { builtinOpenAI } from "../plugins/builtin/provider-openai.js";
+import { builtinLocalTools } from "../plugins/builtin/local-tools.js";
+import { builtinPolicy } from "../plugins/builtin/policy.js";
 import { AgentRuntime } from "../runtime/agent-runtime.js";
-import type { RuntimeEvent, RuntimeOutput, ToolDefinition } from "../runtime/contracts.js";
-import type { ApprovalDecision, ToolExecutor, ToolIntent } from "../runtime/contracts.js";
+import type { RuntimeEvent, RuntimeOutput } from "../runtime/contracts.js";
 import { runChatTurn } from "../runtime/run-chat-turn.js";
-import { bashExecutor } from "../runtime/tools/bash.js";
-import { readFileExecutor } from "../runtime/tools/read-file.js";
-import { editFileExecutor } from "../runtime/tools/edit-file.js";
+import type { ToolDefinition } from "../runtime/contracts.js";
 
 const SYSTEM_PROMPT = `你是一个 CLI 编程助手。重要规则：
 
@@ -64,17 +68,29 @@ async function runLoopDemo(userInput: string): Promise<void> {
     return;
   }
 
-  // 注册真实工具 executor
-  const executors: ToolExecutor[] = [bashExecutor, readFileExecutor, editFileExecutor];
+  // ── 桥梁层：装配 PluginHost → 加载插件 → 创建 AgentRuntime ──
+
+  const registry = new CapabilityRegistry();
+  const hookKernel = new HookKernel(registry);
+
+  // PluginHost 的 onEvent 把 plugin 事件写入 EventBus（暂未接入，后续合并）
+  const pluginEvents: PluginEvent[] = [];
+  const host = new PluginHost(registry, hookKernel, (event) => {
+    pluginEvents.push(event);
+    console.log(`[plugin:event] ${event.type} ${event.pluginId}`);
+  });
+
+  // 加载 builtin 插件
+  await host.load(builtinOpenAI, "builtin");
+  await host.load(builtinLocalTools, "builtin");
+  await host.load(builtinPolicy, "builtin");
 
   const config = loadProviderConfig(process.env);
   const runtime = new AgentRuntime({
-    provider: config.provider,
+    registry,
+    hookKernel,
     model: config.model,
     systemPrompt: SYSTEM_PROMPT,
-    tools: realM0Tools,
-    toolExecutors: executors,
-    approver: cliApprover,
   });
 
   for await (const event of runtime.send({ text: userInput })) {
@@ -87,33 +103,6 @@ async function runLoopDemo(userInput: string): Promise<void> {
   }
 
   output.write(`\n[status] ${runtime.getState().status}\n`);
-}
-
-/**
- * CLI approval function: auto-allow read-only tools, ask user for write/execute tools.
- */
-async function cliApprover(intent: ToolIntent, executor: ToolExecutor): Promise<ApprovalDecision> {
-  // Auto-allow read-only tools
-  if (executor.name === "read_file") {
-    return { type: "allow", reason: "Read-only tool, auto-allowed." };
-  }
-
-  // Ask user for confirmation
-  const readline = createInterface({ input, output });
-  try {
-    output.write(`\n--- [Approval Required] ---\n`);
-    output.write(`Tool: ${intent.toolName}\n`);
-    output.write(`Input: ${JSON.stringify(intent.input, null, 2)}\n`);
-
-    const answer = await readline.question(`Allow this tool? (y/N) `);
-    const trimmed = answer.trim().toLowerCase();
-    if (trimmed === "y" || trimmed === "yes") {
-      return { type: "allow", reason: "User approved." };
-    }
-    return { type: "deny", reason: "User denied." };
-  } finally {
-    readline.close();
-  }
 }
 
 async function runFakeAgentLoop(userInput: string): Promise<void> {
@@ -157,54 +146,6 @@ const fakeAgentLoopTools: ToolDefinition[] = [
     risk: "write",
     isReadOnly: false,
     isConcurrencySafe: false
-  }
-];
-
-const realM0Tools: ToolDefinition[] = [
-  {
-    name: "bash",
-    description: "Execute a shell command in the project directory. Use this to run tests (e.g. npm run test:sum), build, lint, or any CLI operation.",
-    risk: "execute",
-    isReadOnly: false,
-    isConcurrencySafe: false,
-    inputSchema: {
-      type: "object",
-      properties: {
-        command: { type: "string", description: "The shell command to execute." },
-        description: { type: "string", description: "Short description of what this command does." }
-      },
-      required: ["command"]
-    }
-  },
-  {
-    name: "read_file",
-    description: "Read a file from the project and return its contents.",
-    risk: "read",
-    isReadOnly: true,
-    isConcurrencySafe: true,
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "Path to the file to read, relative to project root." }
-      },
-      required: ["path"]
-    }
-  },
-  {
-    name: "edit_file",
-    description: "Apply an edit to a file by replacing oldText with newText. oldText must be unique in the file.",
-    risk: "write",
-    isReadOnly: false,
-    isConcurrencySafe: false,
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "Path to the file to edit." },
-        oldText: { type: "string", description: "The exact text to replace (must be unique in the file)." },
-        newText: { type: "string", description: "The new text to replace oldText with." }
-      },
-      required: ["path", "oldText", "newText"]
-    }
   }
 ];
 

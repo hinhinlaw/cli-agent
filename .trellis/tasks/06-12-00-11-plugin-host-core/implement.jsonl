@@ -1,0 +1,3 @@
+{"file": "research/00-11-article-summary.md", "reason": "00-11 文章关键内容摘要：五部件职责、三类Contribution、伪代码、设计原则、M1最小范围"}
+{"file": "research/code-flow-trace-sum-fix.md", "reason": "前序文档 — 当前代码的完整链路追踪：三层for...of、5阶段管线、Context重建。来自 06-11-00-10-intent-execution"}
+{"file": "research/provider-translation-pipeline.md", "reason": "前序文档 — Provider 翻译链路静态结构映射：ModelEvent↔RuntimeEvent。来自 06-11-m0-core-kernel-provider-runloopdemo-deepseek"}
