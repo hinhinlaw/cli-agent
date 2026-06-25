@@ -19,14 +19,14 @@ import type { RuntimeEvent, RuntimeOutput } from "../runtime/contracts.js";
 import { runChatTurn } from "../runtime/run-chat-turn.js";
 import type { ToolDefinition } from "../runtime/contracts.js";
 
-const SYSTEM_PROMPT = `你是一个 CLI 编程助手。重要规则：
+const SYSTEM_PROMPT = `你是一个 CLI 编程助手，你能够通过工具直接操作项目文件并运行命令。重要规则：
 
 1. 当你需要执行操作时，必须通过系统提供的 function calling 机制来调用工具
 2. 不要在文本回复中使用 XML 标签（如 <tool_call>、<parameter> 等）来模拟工具调用
-3. 不要以文本形式描述工具调用参数——这些不会被执行，只会被当作普通文本输出
-4. 正确做法：直接调用原生 function call，系统会自动执行并在下一轮给你 observation
+3. 发现了代码问题时，必须用 edit_file 工具实际修改代码，不要只是"描述修复方案"
+4. 你的工作是让测试通过，不是写分析报告——改了代码之后必须再跑测试验证
 5. 每次只调用当前最需要的工具，等拿到结果后再决定下一步
-6. 先分析问题，确认方案后再动手，不要假装已执行过命令`;
+6. 当测试全部通过（exit code 0）时，任务才算完成`;
 const LOOP_SYSTEM_PROMPT =
   "你是一个最小 Agent Loop demo。只使用提供的 fake tools，根据 Observation 决定下一步，直到测试通过后 final。";
 
