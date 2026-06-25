@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { loadProviderConfig } from "../config/load-provider-config.js";
 import { FakeAgentLoopProvider } from "../providers/fake.js";
 import type { ChatMessage } from "../providers/contract.js";
@@ -98,11 +100,17 @@ async function runLoopDemo(userInput: string): Promise<void> {
   }
 
   output.write("\n--------------- [event log] ---------------\n");
+  const logLines: string[] = [];
   for (const event of runtime.getEvents()) {
     printLoopEvent(event);
+    logLines.push(formatLoopEvent(event));
   }
+  const statusLine = `\n[status] ${runtime.getState().status}`;
+  output.write(`${statusLine}\n`);
+  logLines.push(statusLine);
 
-  output.write(`\n[status] ${runtime.getState().status}\n`);
+  // 持久化 event log 到 docs/runs/YYYY-MM-DD HH-MM-SS.txt
+  saveRunLog(logLines.join("\n"));
 }
 
 async function runFakeAgentLoop(userInput: string): Promise<void> {
@@ -118,11 +126,15 @@ async function runFakeAgentLoop(userInput: string): Promise<void> {
   }
 
   output.write("\n[event log]\n");
+  const fakeLogLines: string[] = [];
   for (const event of runtime.getEvents()) {
     printLoopEvent(event);
+    fakeLogLines.push(formatLoopEvent(event));
   }
-
-  output.write(`\nstatus: ${runtime.getState().status}\n`);
+  const fakeStatusLine = `\nstatus: ${runtime.getState().status}`;
+  output.write(`${fakeStatusLine}\n`);
+  fakeLogLines.push(fakeStatusLine);
+  saveRunLog(fakeLogLines.join("\n"));
 }
 
 const fakeAgentLoopTools: ToolDefinition[] = [
@@ -198,59 +210,57 @@ function printRuntimeOutput(event: RuntimeOutput): void {
  * @param event 
  */
 function printLoopEvent(event: RuntimeEvent): void {
+  output.write(`${formatLoopEvent(event)}\n`);
+}
+
+function formatLoopEvent(event: RuntimeEvent): string {
   switch (event.type) {
     case "user.message":
-      output.write(`[user] ${event.text}\n`);
-      break;
-
+      return `[user] ${event.text}`;
     case "run.started":
-      output.write(`[run_started] run id: ${event.runId}\n`);
-      break;
-
+      return `[run_started] run id: ${event.runId}`;
     case "model.text.delta":
-      output.write(`[model_text_delta] ${event.text}\n`);
-      break;
-
+      return `[model_text_delta] ${event.text}`;
     case "model.tool.intent":
-      output.write(`[model_tool_intent] ${event.intent.toolName} ${JSON.stringify(event.intent.input)}\n`);
-      break;
-
+      return `[model_tool_intent] ${event.intent.toolName} ${JSON.stringify(event.intent.input)}`;
     case "model.usage":
-      output.write(`[usage] ${JSON.stringify(event.usage)}\n`);
-      break;
-
+      return `[usage] ${JSON.stringify(event.usage)}`;
     case "model.final":
-      output.write(`[final] ${event.text}\n`);
-      break;
-
+      return `[final] ${event.text}`;
     case "run.finished":
-      output.write(`[run_finished] ${event.status}\n`);
-      break;
-
+      return `[run_finished] ${event.status}`;
     case "runtime.error":
-      output.write(`[runtime_error] ${event.error.message}\n`);
-      break;
-
+      return `[runtime_error] ${event.error.message}`;
     case "tool.validation":
-      output.write(`[tool_validation] ${event.toolName} ok=${event.result.ok}\n`);
-      break;
-
+      return `[tool_validation] ${event.toolName} ok=${event.result.ok}`;
     case "tool.approval":
-      output.write(`[tool_approval] ${event.toolName} decision=${event.decision.type}\n`);
-      break;
-
+      return `[tool_approval] ${event.toolName} decision=${event.decision.type}`;
     case "tool.execution.started":
-      output.write(`[tool_execution_started] ${event.toolName}\n`);
-      break;
-
+      return `[tool_execution_started] ${event.toolName}`;
     case "tool.execution.completed":
-      output.write(`[tool_execution_completed] ${event.toolName} type=${event.result.type} duration=${event.result.durationMs}ms\n`);
-      break;
-
+      return `[tool_execution_completed] ${event.toolName} type=${event.result.type} duration=${event.result.durationMs}ms`;
     case "tool.observation":
-      output.write(`[tool_observation] ${event.observation.content.slice(0, 200)}\n`);
-      break;
+      return `[tool_observation] ${event.observation.content.slice(0, 200)}`;
   }
+}
+
+function saveRunLog(content: string): void {
+  const dir = join(process.cwd(), "docs", "runs");
+  mkdirSync(dir, { recursive: true });
+  const filename = formatTimestamp(new Date()) + ".txt";
+  const filepath = join(dir, filename);
+  writeFileSync(filepath, content, "utf-8");
+  output.write(`\n[log saved] ${filepath}\n`);
+}
+
+function formatTimestamp(date: Date): string {
+  const y = date.getFullYear();
+  const mo = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const h = String(date.getHours()).padStart(2, "0");
+  const mi = String(date.getMinutes()).padStart(2, "0");
+  const s = String(date.getSeconds()).padStart(2, "0");
+  return `${y}-${mo}-${d} ${h}-${mi}-${s}`;
 }
 
 async function readUserInput(args: string[]): Promise<string> {
