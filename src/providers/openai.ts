@@ -151,6 +151,13 @@ export class OpenAIProvider implements LlmProvider {
           }
 
           // 模型提出tool_calls，表示模型向系统建议执行工具
+          // openAI的tool_calls可能会将工具参数arguments分成多次返回，所以这里需要用toolCall.id来区分不同的工具调用以及拼接对应的工具参数
+          // 比如：
+          // 第一次返回：{ index: 0, id: 'call_00_QrMEx3CmHdEfkqE80zGo0250', type: 'function', function: { name: 'builtin__local-tools__bash', arguments: '' }}
+          // 第二次返回：{ index: 0, function: { arguments: '{' } }
+          // 第三次返回：{ index: 0, function: { arguments: '"' } }
+          // ...
+          // 直到返回所有的arguments
           for (const toolCall of choice.delta?.tool_calls ?? []) {
             const key = toolCall.id ?? (toolCall.index === undefined ? String(toolCallFragments.size) : toolCallIndexKeys.get(toolCall.index) ?? String(toolCall.index));
             if (toolCall.index !== undefined) {
@@ -169,6 +176,7 @@ export class OpenAIProvider implements LlmProvider {
       }
 
       for (const toolCall of toolCallFragments.values()) {
+        console.log('最终toolCall', toolCall)
         yield {
           type: "tool_intent",
           id: toolCall.id,
