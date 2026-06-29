@@ -139,16 +139,16 @@ export class AgentRuntime {
         }
 
         switch (event.type) {
-          case "message_start":
+          case "model.started":
             break;
 
-          case "text_delta":
+          case "model.text_delta":
             text += event.text;
             this.eventBus.append({ type: "model.text.delta", runId, text: event.text });
             yield { type: "text.delta", text: event.text };
             break;
 
-          case "tool_intent": {
+          case "tool_intent.proposed": {
             const intentOrError = toToolIntent(event, this.provider.name);
             if (intentOrError.error) {
               this.eventBus.append({ type: "runtime.error", runId, error: intentOrError.error });
@@ -166,7 +166,7 @@ export class AgentRuntime {
             break;
           }
 
-          case "message_stop":
+          case "model.finished":
             if (event.usage) {
               this.eventBus.append({ type: "model.usage", runId, usage: event.usage });
             }
@@ -224,7 +224,7 @@ export class AgentRuntime {
             yield { type: "status", status: "waiting_for_tool" };
             return;
 
-          case "error": {
+          case "provider.error": {
             const error = providerRuntimeError(event.error);
             this.eventBus.append({ type: "runtime.error", runId, error });
             this.eventBus.append({ type: "run.finished", runId, status: "failed", reason: event.error.kind });
@@ -274,16 +274,16 @@ export class AgentRuntime {
       }
 
       switch (event.type) {
-        case "message_start":
+        case "model.started":
           break;
 
-        case "text_delta":
+        case "model.text_delta":
           text += event.text;
           this.eventBus.append({ type: "model.text.delta", runId, text: event.text });
           yield { type: "text.delta", text: event.text };
           break;
 
-        case "tool_intent": {
+        case "tool_intent.proposed": {
           const intentOrError = toToolIntent(event, this.provider.name);
           if (intentOrError.error) {
             this.eventBus.append({ type: "runtime.error", runId, error: intentOrError.error });
@@ -297,7 +297,7 @@ export class AgentRuntime {
           break;
         }
 
-        case "message_stop":
+        case "model.finished":
           if (event.usage) {
             this.eventBus.append({ type: "model.usage", runId, usage: event.usage });
           }
@@ -311,7 +311,7 @@ export class AgentRuntime {
           yield { type: "status", status: "completed" };
           return;
 
-        case "error": {
+        case "provider.error": {
           const error = providerRuntimeError(event.error);
           this.eventBus.append({ type: "runtime.error", runId, error });
           this.eventBus.append({ type: "run.finished", runId, status: "failed", reason: event.error.kind });
@@ -365,34 +365,24 @@ function runtimeError(code: RuntimeErrorEvent["code"], message: string, retryabl
 }
 
 function toToolIntent(
-  event: Extract<ModelEvent, { type: "tool_intent" }>,
-  provider: string
+  event: Extract<ModelEvent, { type: "tool_intent.proposed" }>,
+  _provider: string
 ): { intent: ToolIntent; error?: never } | { intent?: never; error: RuntimeErrorEvent } {
-  try {
-    const parsed = JSON.parse(event.argumentsText || "{}") as unknown;
-    if (!isRecord(parsed)) {
-      return { error: runtimeError("invalid_tool_intent", `Tool intent arguments for ${event.name} must be a JSON object.`, true) };
-    }
-    return {
-      intent: {
-        intentId: randomUUID(),
-        toolName: event.name,
-        input: parsed,
-        providerRef: {
-          provider,
-          rawId: event.id
-        }
-      }
-    };
-  } catch (error) {
-    return {
-      error: runtimeError(
-        "invalid_tool_intent",
-        error instanceof Error ? error.message : `Tool intent arguments for ${event.name} are invalid.`,
-        true
-      )
-    };
+  // 00-12: input 已在 Provider Runtime 中解析，这里只需验证和包装
+  if (!isRecord(event.input)) {
+    return { error: runtimeError("invalid_tool_intent", `Tool intent input for ${event.toolName} must be a JSON object.`, true) };
   }
+  return {
+    intent: {
+      intentId: randomUUID(),
+      toolName: event.toolName,
+      input: event.input as Record<string, unknown>,
+      providerRef: {
+        provider: event.provider,
+        rawId: event.providerCallId
+      }
+    }
+  };
 }
 
 function providerRuntimeError(error: ProviderError): RuntimeErrorEvent {

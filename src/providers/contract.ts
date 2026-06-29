@@ -31,16 +31,22 @@ export interface ChatToolSpec {
 }
 
 /**
- * 模型事件
- * 系统会将 LLM 的响应统一转换成结构化数据 ModelEvent，而不是将 LLM 响应原封不动输出到系统的其他部件
- * 有了 ModelEvent，就可以将模型的行为的判断收敛到 Provider 层中
+ * 模型事件（Provider Runtime 归一化输出）
+ *
+ * 00-12 重命名规则：
+ * - model.*   → 模型自身的生命周期事件
+ * - tool_intent.* → 模型提出的工具调用意图
+ * - provider.* → provider 层自身错误
+ *
+ * Provider Runtime 只产出事件，不执行工具。
  */
 export type ModelEvent =
-  | { type: "message_start"; provider: string; model: string }
-  | { type: "text_delta"; text: string }
-  | { type: "message_stop"; usage?: TokenUsage; stopReason?: string }
-  | { type: "tool_intent"; name: string; argumentsText: string; id?: string }
-  | { type: "error"; error: ProviderError };
+  | { type: "model.started"; provider: string; model: string }
+  | { type: "model.text_delta"; text: string }
+  | { type: "model.finished"; usage?: TokenUsage; stopReason?: string }
+  | { type: "tool_intent.delta"; providerCallId: string; toolName?: string; rawInputText: string }
+  | { type: "tool_intent.proposed"; id: string; toolName: string; input: unknown; providerCallId?: string; provider: string; model: string }
+  | { type: "provider.error"; error: ProviderError };
 
 export interface TokenUsage {
   inputTokens?: number;

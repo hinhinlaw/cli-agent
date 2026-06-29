@@ -27,10 +27,10 @@ test("runChatTurn prints all fake provider text deltas", async () => {
 
 test("runChatTurn stops when message_stop is emitted", async () => {
   const provider = new EventsProvider([
-    { type: "message_start", provider: "test", model: "test-model" },
-    { type: "text_delta", text: "before stop" },
-    { type: "message_stop", stopReason: "end_turn" },
-    { type: "text_delta", text: "after stop" }
+    { type: "model.started", provider: "test", model: "test-model" },
+    { type: "model.text_delta", text: "before stop" },
+    { type: "model.finished", stopReason: "end_turn" },
+    { type: "model.text_delta", text: "after stop" }
   ]);
   const deltas: string[] = [];
 
@@ -49,8 +49,8 @@ test("runChatTurn stops when message_stop is emitted", async () => {
 
 test("runChatTurn rejects tool_intent because Tool Runtime is not enabled", async () => {
   const provider = new EventsProvider([
-    { type: "message_start", provider: "test", model: "test-model" },
-    { type: "tool_intent", name: "read_file", argumentsText: "{\"path\":\"package.json\"}" }
+    { type: "model.started", provider: "test", model: "test-model" },
+    { type: "tool_intent.proposed", id: "call-1", toolName: "read_file", input: { path: "package.json" }, provider: "test", model: "test-model" }
   ]);
 
   await assert.rejects(
@@ -68,7 +68,7 @@ test("runChatTurn rejects tool_intent because Tool Runtime is not enabled", asyn
 test("runChatTurn maps ProviderError into RuntimeError", async () => {
   const provider = new EventsProvider([
     {
-      type: "error",
+      type: "provider.error",
       error: {
         kind: "auth",
         retryable: false,

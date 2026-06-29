@@ -1,0 +1,1 @@
+{"entries":[{"path":"src/providers/openai.test.ts","reason":"OpenAIProvider 测试"},{"path":"src/runtime/agent-runtime.test.ts","reason":"AgentRuntime 测试"},{"path":"src/runtime/run-chat-turn.test.ts","reason":"runChatTurn 测试"},{"path":"src/tests/sum.test.ts","reason":"确保端到端不受影响"}]}

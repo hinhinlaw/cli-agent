@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatRequest, ChatResult, LlmProvider, ModelEvent, TokenUsage } from "./contract.js";
 import { providerErrorFromHttp, providerErrorFromUnknown } from "./errors.js";
+import { ToolCallAssembler } from "./tool-call-assembler.js";
 
 export interface OpenAIProviderConfig {
   apiKey: string;
@@ -100,13 +101,13 @@ export class OpenAIProvider implements LlmProvider {
       });
 
       if (!response.ok) {
-        yield { type: "error", error: await this.toProviderError(response) };
+        yield { type: "provider.error", error: await this.toProviderError(response) };
         return;
       }
 
       if (!response.body) {
         yield {
-          type: "error",
+          type: "provider.error",
           error: {
             kind: "unknown",
             retryable: false,
@@ -117,12 +118,12 @@ export class OpenAIProvider implements LlmProvider {
         return;
       }
 
-      yield { type: "message_start", provider: this.name, model: request.model };
+      yield { type: "model.started", provider: this.name, model: request.model };
 
       let stopReason: string | undefined;
       let usage: TokenUsage | undefined;
-      const toolCallFragments = new Map<string, { id?: string; name?: string; argumentsText: string }>();
-      const toolCallIndexKeys = new Map<number, string>();
+      const assembler = new ToolCallAssembler();
+      const indexKeys = new Map<number, string>();
 
       for await (const chunk of readServerSentEvents(response.body)) {
         if (chunk === "[DONE]") {
@@ -132,7 +133,7 @@ export class OpenAIProvider implements LlmProvider {
         const event = parseOpenAIChunk(chunk);
         if (event.error) {
           yield {
-            type: "error",
+            type: "provider.error",
             error: {
               kind: "unknown",
               retryable: false,
@@ -147,46 +148,51 @@ export class OpenAIProvider implements LlmProvider {
 
         for (const choice of event.choices ?? []) {
           if (choice.delta?.content) {
-            yield { type: "text_delta", text: choice.delta.content };
+            yield { type: "model.text_delta", text: choice.delta.content };
           }
 
-          // 模型提出tool_calls，表示模型向系统建议执行工具
-          // openAI的tool_calls可能会将工具参数arguments分成多次返回，所以这里需要用toolCall.id来区分不同的工具调用以及拼接对应的工具参数
-          // 比如：
-          // 第一次返回：{ index: 0, id: 'call_00_QrMEx3CmHdEfkqE80zGo0250', type: 'function', function: { name: 'builtin__local-tools__bash', arguments: '' }}
-          // 第二次返回：{ index: 0, function: { arguments: '{' } }
-          // 第三次返回：{ index: 0, function: { arguments: '"' } }
-          // ...
-          // 直到返回所有的arguments
+          // 拼接 streaming tool-call delta
           for (const toolCall of choice.delta?.tool_calls ?? []) {
-            const key = toolCall.id ?? (toolCall.index === undefined ? String(toolCallFragments.size) : toolCallIndexKeys.get(toolCall.index) ?? String(toolCall.index));
-            if (toolCall.index !== undefined) {
-              toolCallIndexKeys.set(toolCall.index, key);
+            const providerCallId = toolCall.id
+              ?? (toolCall.index !== undefined
+                ? indexKeys.get(toolCall.index) ?? String(toolCall.index)
+                : String(assembler.getPending().length));
+            if (toolCall.index !== undefined && toolCall.id) {
+              indexKeys.set(toolCall.index, toolCall.id);
             }
-            const current = toolCallFragments.get(key) ?? { argumentsText: "" };
-            toolCallFragments.set(key, {
-              id: toolCall.id ?? current.id,
-              name: toolCall.function?.name ?? current.name,
-              argumentsText: current.argumentsText + (toolCall.function?.arguments ?? "")
-            });
+            const toolName = toolCall.function?.name;
+            const argsText = toolCall.function?.arguments ?? "";
+
+            assembler.push(providerCallId, toolName, argsText);
+
+            // 产出增量 delta 事件（00-12：让 streaming 过程可追溯）
+            yield {
+              type: "tool_intent.delta",
+              providerCallId,
+              toolName,
+              rawInputText: argsText
+            };
           }
 
           stopReason = choice.finish_reason ?? stopReason;
         }
       }
 
-      for (const toolCall of toolCallFragments.values()) {
-        console.log('最终toolCall', toolCall)
+      // 产出完整的 tool_intent.proposed 事件
+      for (const finalized of assembler.finalize()) {
         yield {
-          type: "tool_intent",
-          id: toolCall.id,
-          name: toolCall.name ?? "unknown",
-          argumentsText: toolCall.argumentsText
+          type: "tool_intent.proposed",
+          id: finalized.providerCallId,
+          toolName: finalized.toolName,
+          input: finalized.input,
+          providerCallId: finalized.providerCallId,
+          provider: this.name,
+          model: request.model
         };
       }
-      yield { type: "message_stop", usage, stopReason };
+      yield { type: "model.finished", usage, stopReason };
     } catch (error) {
-      yield { type: "error", error: providerErrorFromUnknown(this.name, error) };
+      yield { type: "provider.error", error: providerErrorFromUnknown(this.name, error) };
     }
   }
 

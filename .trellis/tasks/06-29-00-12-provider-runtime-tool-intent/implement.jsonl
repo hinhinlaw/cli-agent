@@ -1,0 +1,1 @@
+{"entries":[{"path":"src/providers/contract.ts","reason":"ModelEvent 类型定义，所有其他文件依赖"},{"path":"src/providers/openai.ts","reason":"OpenAIProvider stream 实现"},{"path":"src/providers/fake.ts","reason":"Fake provider 实现"},{"path":"src/runtime/agent-runtime.ts","reason":"消费 ModelEvent 的主 runtime"},{"path":"src/runtime/run-chat-turn.ts","reason":"消费 ModelEvent 的旧 chat turn"}]}

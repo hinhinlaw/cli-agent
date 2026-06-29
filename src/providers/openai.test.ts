@@ -25,8 +25,8 @@ test("OpenAIProvider maps HTTP auth errors into ProviderError events", async () 
     }
 
     assert.equal(events.length, 1);
-    assert.equal(events[0]?.type, "error");
-    if (events[0]?.type !== "error") {
+    assert.equal(events[0]?.type, "provider.error");
+    if (events[0]?.type !== "provider.error") {
       throw new Error("Expected error event.");
     }
     assert.equal(events[0].error.kind, "auth");
@@ -101,11 +101,24 @@ test("OpenAIProvider aggregates streamed tool call fragments into one tool_inten
 
     const requestBody = JSON.parse(capturedBody) as { tools?: Array<{ function?: { name?: string } }> };
     assert.equal(requestBody.tools?.[0]?.function?.name, "run_tests");
-    assert.deepEqual(
-      events.filter((event) => event.type === "tool_intent"),
-      [{ type: "tool_intent", id: "call_1", name: "run_tests", argumentsText: "{\"command\":\"npm test\"}" }]
-    );
-    assert.equal(events.at(-1)?.type, "message_stop");
+    // 00-12: delta events during streaming, proposed at end
+    const deltas = events.filter((event) => event.type === "tool_intent.delta");
+    assert.ok(deltas.length >= 1, "Should emit tool_intent.delta during streaming");
+    assert.equal(deltas[0].providerCallId, "call_1");
+    assert.equal(deltas[0].toolName, "run_tests");
+
+    const proposed = events.filter((event) => event.type === "tool_intent.proposed");
+    assert.equal(proposed.length, 1);
+    assert.equal(proposed[0].type, "tool_intent.proposed");
+    if (proposed[0].type === "tool_intent.proposed") {
+      assert.equal(proposed[0].id, "call_1");
+      assert.equal(proposed[0].toolName, "run_tests");
+      assert.deepEqual(proposed[0].input, { command: "npm test" });
+      assert.equal(proposed[0].provider, "openai");
+      assert.equal(proposed[0].model, "gpt-test");
+    }
+
+    assert.equal(events.at(-1)?.type, "model.finished");
   } finally {
     globalThis.fetch = originalFetch;
   }

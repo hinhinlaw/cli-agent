@@ -10,9 +10,9 @@ const userText = "帮我看看测试为什么失败，并把它修好。";
 
 test("AgentRuntime records final text as runtime events", async () => {
   const provider = new ScriptedProvider(() => [
-    { type: "message_start", provider: "test", model: "test-model" },
-    { type: "text_delta", text: "已完成。" },
-    { type: "message_stop", stopReason: "end_turn", usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 } }
+    { type: "model.started", provider: "test", model: "test-model" },
+    { type: "model.text_delta", text: "已完成。" },
+    { type: "model.finished", stopReason: "end_turn", usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 } }
   ]);
   const runtime = new AgentRuntime({ provider, model: "test-model" });
 
@@ -36,10 +36,10 @@ test("AgentRuntime records tool intent without executing tools", async () => {
   const provider = new ScriptedProvider((request) => {
     seenRequests.push(request);
     return [
-      { type: "message_start", provider: "test", model: request.model },
-      { type: "text_delta", text: "我需要先运行测试。" },
-      { type: "tool_intent", id: "provider-call-1", name: "run_tests", argumentsText: "{\"command\":\"npm test\"}" },
-      { type: "message_stop", stopReason: "tool_use" }
+      { type: "model.started", provider: "test", model: request.model },
+      { type: "model.text_delta", text: "我需要先运行测试。" },
+      { type: "tool_intent.proposed", id: "provider-call-1", toolName: "run_tests", input: { command: "npm test" }, provider: "test", model: request.model },
+      { type: "model.finished", stopReason: "tool_use" }
     ];
   });
   const runtime = new AgentRuntime({
@@ -70,9 +70,9 @@ test("AgentRuntime records tool intent without executing tools", async () => {
 
 test("AgentRuntime rejects malformed tool intent arguments as runtime errors", async () => {
   const provider = new ScriptedProvider(() => [
-    { type: "message_start", provider: "test", model: "test-model" },
-    { type: "tool_intent", name: "run_tests", argumentsText: "not-json" },
-    { type: "message_stop", stopReason: "tool_use" }
+    { type: "model.started", provider: "test", model: "test-model" },
+    { type: "tool_intent.proposed", id: "call-1", toolName: "run_tests", input: "not-json", provider: "test", model: "test-model" },
+    { type: "model.finished", stopReason: "tool_use" }
   ]);
   const runtime = new AgentRuntime({ provider, model: "test-model", tools: [runTestsTool()] });
 
@@ -109,9 +109,9 @@ test("reduceConversationState rebuilds pending tool state from events", () => {
 
 test("runAgentLoop wrapper preserves M0 no-execution semantics", async () => {
   const provider = new ScriptedProvider(() => [
-    { type: "message_start", provider: "test", model: "test-model" },
-    { type: "tool_intent", name: "run_tests", argumentsText: "{\"command\":\"npm test\"}" },
-    { type: "message_stop", stopReason: "tool_use" }
+    { type: "model.started", provider: "test", model: "test-model" },
+    { type: "tool_intent.proposed", id: "call-1", toolName: "run_tests", input: { command: "npm test" }, provider: "test", model: "test-model" },
+    { type: "model.finished", stopReason: "tool_use" }
   ]);
 
   const result = await runAgentLoop({

@@ -31,9 +31,17 @@ export const bashExecutor: ToolExecutor = {
     } catch (error: unknown) {
       const durationMs = Math.round(performance.now() - start);
       if (error instanceof Error && "stderr" in error) {
-        const stderr = (error as { stderr: string }).stderr ?? "";
-        const exitCode = (error as { status?: number }).status;
-        return { type: "failed", output: stderr || error.message, exitCode, durationMs, error: error.message };
+        const stdout = (error as { stdout?: string }).stdout ?? "";
+        const stderr = (error as { stderr?: string }).stderr ?? "";
+        const combined = [stdout, stderr].filter(Boolean).join("\n");
+        const exitCode = (error as { status?: number }).status ?? (error as { code?: number | null }).code ?? undefined;
+        return {
+          type: "failed",
+          output: combined || error.message,
+          exitCode,
+          durationMs,
+          error: error.message
+        };
       }
       return { type: "failed", output: String(error), durationMs, error: String(error) };
     }

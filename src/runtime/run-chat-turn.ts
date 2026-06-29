@@ -34,25 +34,25 @@ export async function runChatTurn(args: RunChatTurnArgs): Promise<RunChatTurnRes
 
   for await (const event of args.provider.stream(request)) {
     switch (event.type) {
-      case "message_start":
+      case "model.started":
         break;
 
-      case "text_delta":
+      case "model.text_delta":
         text += event.text;
         args.onTextDelta(event.text);
         break;
 
-      case "message_stop":
+      case "model.finished":
         return {
           text,
           usage: event.usage,
           stopReason: event.stopReason
         };
 
-      case "tool_intent":
+      case "tool_intent.proposed":
         throw new RuntimeError("Tool intent was emitted, but Tool Runtime is not enabled in this milestone.");
 
-      case "error":
+      case "provider.error":
         throw mapProviderErrorToRuntimeError(event.error);
     }
   }
