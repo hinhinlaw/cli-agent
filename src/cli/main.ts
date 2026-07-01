@@ -118,6 +118,7 @@ async function runLoopDemo(userInput: string): Promise<void> {
 
   // 持久化 event log 到 docs/runs/YYYY-MM-DD HH-MM-SS.txt
   saveRunLog(logLines.join("\n"));
+  process.exit(0);
 }
 
 async function runFakeAgentLoop(userInput: string): Promise<void> {
@@ -142,6 +143,7 @@ async function runFakeAgentLoop(userInput: string): Promise<void> {
   output.write(`${fakeStatusLine}\n`);
   fakeLogLines.push(fakeStatusLine);
   saveRunLog(fakeLogLines.join("\n"));
+  process.exit(0);
 }
 
 const fakeAgentLoopTools: ToolDefinition[] = [

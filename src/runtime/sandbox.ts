@@ -1,3 +1,5 @@
+import { join, resolve, sep } from "node:path";
+
 /**
  * M1 最小沙箱：工作目录限制 + 文件路径规范化。
  * 后续接系统级 sandbox 时保留此接口。
@@ -11,7 +13,6 @@ export class Sandbox {
 
   /** 校验路径在工作目录内，并返回规范化的绝对路径 */
   resolvePath(relativePath: string): string {
-    const { join, resolve, sep } = require("node:path") as typeof import("node:path");
 
     // 将相对路径解析为绝对路径
     const absolute = resolve(this.workspaceRoot, relativePath);
