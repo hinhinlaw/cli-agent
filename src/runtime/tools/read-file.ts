@@ -53,22 +53,39 @@ export const readFileExecutor: ToolExecutor = {
   },
 
   toObservation(result: ExecutionResult): Observation {
-    const lines: string[] = [];
-    lines.push(`Tool: read_file`);
-    lines.push(`Status: ${result.type === "success" ? "Success" : "Failed"}`);
-    lines.push(`Duration: ${result.durationMs}ms`);
-    lines.push("");
+    const ok = result.type === "success";
+    const summary = ok
+      ? `read_file: file read successfully (${result.durationMs}ms${result.truncated ? ", truncated" : ""})`
+      : `read_file: read failed`;
 
-    if (result.type === "success") {
-      lines.push(result.output);
-      if (result.truncated) {
-        lines.push("");
-        lines.push("(content truncated — file is larger than shown)");
-      }
-    } else {
-      lines.push(result.output);
+    const modelLines: string[] = [];
+    modelLines.push(`Tool: read_file`);
+    modelLines.push(`Status: ${ok ? "Success" : "Failed"}`);
+    modelLines.push(`Duration: ${result.durationMs}ms`);
+    modelLines.push("");
+    modelLines.push(result.output);
+    if (result.truncated) {
+      modelLines.push("");
+      modelLines.push("(content truncated — file is larger than shown, use offset/limit to read more)");
     }
 
-    return { content: lines.join("\n") };
+    const userLines: string[] = [];
+    userLines.push(`[read_file] ${ok ? "Success" : "Failed"} (${result.durationMs}ms)`);
+    if (result.truncated) userLines.push("(truncated)");
+
+    return {
+      ok,
+      phase: "execute",
+      summary,
+      modelText: modelLines.join("\n"),
+      userText: userLines.join("\n"),
+      toolName: "read_file",
+      details: {
+        durationMs: result.durationMs,
+        truncated: result.truncated
+      },
+      retryable: true,
+      sideEffects: "none"
+    };
   }
 };

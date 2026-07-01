@@ -48,21 +48,42 @@ export const bashExecutor: ToolExecutor = {
   },
 
   toObservation(result: ExecutionResult): Observation {
-    const lines: string[] = [];
-    lines.push(`Tool: bash`);
-    lines.push(`Status: ${result.type === "success" ? "Success" : "Failed"}`);
-    if (result.exitCode !== undefined) {
-      lines.push(`Exit code: ${result.exitCode}`);
-    }
-    lines.push(`Duration: ${result.durationMs}ms`);
-    lines.push("");
-    lines.push(result.output);
+    const ok = result.type === "success";
+    const exitCode = result.exitCode;
+    const summary = ok
+      ? `bash: command completed (exit ${exitCode ?? 0}, ${result.durationMs}ms)`
+      : `bash: command failed (exit ${exitCode ?? "?"}, ${result.durationMs}ms)`;
 
+    const modelLines: string[] = [];
+    modelLines.push(`Tool: bash`);
+    modelLines.push(`Status: ${ok ? "Success" : "Failed"}`);
+    if (exitCode !== undefined) modelLines.push(`Exit code: ${exitCode}`);
+    modelLines.push(`Duration: ${result.durationMs}ms`);
+    modelLines.push("");
+    modelLines.push(result.output);
     if (result.truncated) {
-      lines.push("");
-      lines.push("(output truncated)");
+      modelLines.push("");
+      modelLines.push("(output truncated, use read_file or narrow down command for full output)");
     }
 
-    return { content: lines.join("\n") };
+    const userLines: string[] = [];
+    userLines.push(`[bash] ${ok ? "Success" : "Failed"} (exit ${exitCode ?? "?"}, ${result.durationMs}ms)`);
+    if (result.truncated) userLines.push("(output truncated)");
+
+    return {
+      ok,
+      phase: "execute",
+      summary,
+      modelText: modelLines.join("\n"),
+      userText: userLines.join("\n"),
+      toolName: "bash",
+      details: {
+        exitCode,
+        durationMs: result.durationMs,
+        truncated: result.truncated
+      },
+      retryable: true,
+      sideEffects: "process_executed"
+    };
   }
 };

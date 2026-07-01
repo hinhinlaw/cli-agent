@@ -247,7 +247,7 @@ function formatLoopEvent(event: RuntimeEvent): string {
     case "tool.execution.completed":
       return `[tool_execution_completed] ${event.toolName} type=${event.result.type} duration=${event.result.durationMs}ms`;
     case "tool.observation":
-      return `[tool_observation] ${event.observation.content.slice(0, 200)}`;
+      return `[tool_observation] ${event.observation.modelText.slice(0, 200)}`;
   }
 }
 

@@ -67,7 +67,7 @@ export function reduceConversationState(events: readonly RuntimeEvent[]): Conver
         break;
 
       case "tool.observation":
-        state.messages.push({ role: "user", content: event.observation.content });
+        state.messages.push({ role: "user", content: event.observation.modelText });
         state.pendingToolIntents = state.pendingToolIntents.filter(
           (intent) => intent.intentId !== event.intentId
         );

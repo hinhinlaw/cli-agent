@@ -77,19 +77,38 @@ export const editFileExecutor: ToolExecutor = {
   },
 
   toObservation(result: ExecutionResult): Observation {
-    const lines: string[] = [];
-    lines.push(`Tool: edit_file`);
-    lines.push(`Status: ${result.type === "success" ? "Success" : "Failed"}`);
-    lines.push(`Duration: ${result.durationMs}ms`);
-    lines.push("");
+    const ok = result.type === "success";
+    const summary = ok
+      ? `edit_file: file edited successfully (${result.durationMs}ms)`
+      : `edit_file: edit failed`;
 
-    if (result.type === "success") {
-      lines.push(result.output);
+    const modelLines: string[] = [];
+    modelLines.push(`Tool: edit_file`);
+    modelLines.push(`Status: ${ok ? "Success (files modified)" : "Failed"}`);
+    modelLines.push(`Duration: ${result.durationMs}ms`);
+    modelLines.push("");
+    if (ok) {
+      modelLines.push(result.output);
     } else {
-      lines.push(`Error: ${result.error ?? result.output}`);
+      modelLines.push(`Error: ${result.error ?? result.output}`);
     }
 
-    return { content: lines.join("\n") };
+    const userLines: string[] = [];
+    userLines.push(`[edit_file] ${ok ? "Success" : "Failed"} (${result.durationMs}ms)`);
+
+    return {
+      ok,
+      phase: "execute",
+      summary,
+      modelText: modelLines.join("\n"),
+      userText: userLines.join("\n"),
+      toolName: "edit_file",
+      details: {
+        durationMs: result.durationMs
+      },
+      retryable: ok, // 编辑失败通常不能重试（需要重新 read + edit）
+      sideEffects: ok ? "files_modified" : "none"
+    };
   }
 };
 

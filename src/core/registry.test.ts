@@ -26,7 +26,16 @@ function fakeExecutor(name: string): ToolExecutor {
       exitCode: 0,
       durationMs: 1
     }),
-    toObservation: (result) => ({ content: result.output })
+    toObservation: (result) => ({
+      ok: result.type === "success",
+      phase: "execute" as const,
+      summary: result.output,
+      modelText: result.output,
+      userText: result.output,
+      toolName: name,
+      retryable: true,
+      sideEffects: "none" as const
+    })
   };
 }
 
