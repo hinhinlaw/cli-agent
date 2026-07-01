@@ -39,12 +39,25 @@ export async function handleToolIntent(
   const scheduler = args.scheduler ?? new Scheduler();
   const sandbox = args.sandbox ?? new Sandbox();
 
-  // 1. Lookup
-  const executor = executorMap.get(intent.toolName);
+  // 1. Lookup — 先精确匹配，再按短名（最后一段）兜底
+  //    模型可能用 short name（bash），内部 key 是全名（builtin/local-tools/bash）
+  let executor = executorMap.get(intent.toolName);
   if (!executor) {
+    // 按短名查找：遍历 executorMap，匹配最后一段
+    const shortName = intent.toolName.split("/").pop() ?? intent.toolName;
+    for (const [key, exec] of executorMap) {
+      if (key.endsWith("/" + shortName) || key === shortName) {
+        executor = exec;
+        break;
+      }
+    }
+  }
+  if (!executor) {
+    // 列出短名给模型看，而不是长长的 builtin/local-tools/xxx
+    const shortNames = [...executorMap.keys()].map(k => k.split("/").pop() ?? k);
     const obs = makeObservation(intent.toolName, "lookup", false, {
       summary: `Unknown tool: "${intent.toolName}"`,
-      modelText: `Tool "${intent.toolName}" is not available. Available: ${[...executorMap.keys()].join(", ")}`,
+      modelText: `Tool "${intent.toolName}" is not available. Available: ${shortNames.join(", ")}`,
       userText: `[${intent.toolName}] Unknown tool`,
       retryable: true,
       sideEffects: "none"

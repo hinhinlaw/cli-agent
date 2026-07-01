@@ -157,10 +157,7 @@ export class AgentRuntime {
               return;
             }
             sawToolIntent = true;
-            lastIntent = {
-              ...intentOrError.intent,
-              toolName: decodeApiName(intentOrError.intent.toolName)
-            };
+            lastIntent = intentOrError.intent;
             this.eventBus.append({ type: "model.tool.intent", runId, intent: lastIntent });
             yield { type: "tool.intent", intent: lastIntent };
             break;
@@ -352,8 +349,8 @@ export class AgentRuntime {
 
   private buildToolSpecs() {
     return this.toolRegistry.visibleTools().map((tool) => ({
-      // API 要求 tool name 匹配 ^[a-zA-Z0-9_-]+$，将内部的 / 分隔符编码为 __
-      name: encodeApiName(tool.name),
+      // 给模型看短名（如 bash），内部全名（builtin/local-tools/bash）在 lookup 时做映射
+      name: shortName(tool.name),
       description: tool.description,
       inputSchema: tool.inputSchema
     }));
@@ -419,18 +416,9 @@ function createApproverFromHookKernel(hookKernel: HookKernel): ApproverFn {
 }
 
 /**
- * 将内部 tool name（含 / 分隔符）编码为 API 兼容格式。
- * API 要求 tool name 匹配 ^[a-zA-Z0-9_-]+$，我们用 __ 作为 / 的替代。
- * 例：builtin/local-tools/bash → builtin__local-tools__bash
+ * 从内部全名中提取短名（最后一段）。
+ * 例：builtin/local-tools/bash → bash
  */
-function encodeApiName(internalName: string): string {
-  return internalName.replace(/\//g, "__");
-}
-
-/**
- * 将 API 兼容的 tool name 解码回内部格式。
- * 例：builtin__local-tools__bash → builtin/local-tools/bash
- */
-function decodeApiName(apiName: string): string {
-  return apiName.replace(/__/g, "/");
+function shortName(internalName: string): string {
+  return internalName.split("/").pop() ?? internalName;
 }
